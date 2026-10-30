@@ -1,0 +1,14 @@
+data/
+backend/.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+vault/.obsidian/workspace*.json
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/test-results/
+frontend/playwright-report/
+frontend/artifacts/
+*.tsbuildinfo

@@ -1,0 +1,9 @@
+{
+  "name": "FitDesk",
+  "category": "fitness app",
+  "pitch": "A fitness app with 20-minute daily workouts you can do at home or at your desk. It tracks your progress, reminds you to move, and builds a weekly training plan around your health goals and stress levels.",
+  "price": 299,
+  "currency": "INR",
+  "price_period": "month",
+  "target_hint": "athletes"
+}

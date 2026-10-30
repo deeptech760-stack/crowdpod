@@ -1,0 +1,14 @@
+Crowdpod
+Licensed under the GNU Affero General Public License v3.0 (see LICENSE).
+
+This project includes code adapted from MiroFish
+(https://github.com/666ghj/MiroFish, commit 7657031, AGPL-3.0).
+Files containing adapted code carry a header saying so. They were
+modified on 2026-10-30: comments translated, async wrappers added,
+and the code was fitted to Crowdpod's persona and reaction models.
+
+Adapted files:
+  backend/src/crowdpod/llm/openai_compat.py  (LLM client, JSON-mode fallback, response parsing)
+  backend/src/crowdpod/llm/json_utils.py     (value coercion, truncated-JSON repair)
+  backend/src/crowdpod/retry.py              (async retry with backoff)
+  backend/src/crowdpod/models.py             (persona identity/behaviour field split)
