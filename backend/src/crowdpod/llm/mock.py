@@ -11,6 +11,7 @@ import math
 import random
 import re
 from typing import Any, TypeVar
+from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
@@ -116,7 +117,8 @@ def goal_words(goal: str) -> list[str]:
 
 
 def decide(persona: Persona, arch: Archetype, goal: str, obs: Observation, history: list[dict[str, Any]]) -> HandsDecision:
-    rng = random.Random(stable_seed(persona.seed, "hands", len(history), obs.url, obs.scroll_y))
+    # seed on the path only, so the same persona behaves the same on any host or port
+    rng = random.Random(stable_seed(persona.seed, "hands", len(history), urlparse(obs.url).path, obs.scroll_y))
     # A goal set for this run says what to look for; otherwise use the archetype's own words.
     custom = goal not in arch.goals_on_site
     keywords = (goal_words(goal) if custom else []) or [k for k in arch.goal_keywords if k]

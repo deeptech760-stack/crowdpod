@@ -11,6 +11,7 @@ from crowdpod.hands.driver import PlaywrightBrowser
 from crowdpod.llm.mock import MockProvider
 from crowdpod.models import HandsRequest, HandsStep, RunRequest
 from crowdpod.pipeline import Pipeline
+from crowdpod.runtime import SettingsStore, defaults_from
 from crowdpod.sampler import CrowdSampler
 from crowdpod.store import Store
 
@@ -19,8 +20,10 @@ def _persona(vault, archetype, seed=7):
     return CrowdSampler(vault, seed=seed).sample(1, "h", {archetype: 1})[0]
 
 
-async def _session(vault, tmp_path, url, archetype, goal=None):
+async def _session(vault, tmp_path, url, archetype, goal=None, tech=None):
     persona = _persona(vault, archetype)
+    if tech is not None:
+        persona = persona.model_copy(update={"tech_comfort": tech})  # never misses a matching link
     arch = vault.archetypes[archetype]
     goal = goal or arch.goals_on_site[0]
     steps: list[HandsStep] = []
@@ -56,8 +59,8 @@ async def test_corporate_worker_finds_calendar_sync(vault, tmp_path, site_url):
 
 
 async def test_run_goal_overrides_archetype_goal(vault, tmp_path, site_url):
-    """A mother sent to look at the stories clicks Stories, not a price link."""
-    _, session, _ = await _session(vault, tmp_path, f"{site_url}/fitdesk-cluttered/", "mother", goal="read the stories from users")
+    """A student sent to read the stories clicks Stories, not a pricing link."""
+    _, session, _ = await _session(vault, tmp_path, f"{site_url}/fitdesk-cluttered/", "student", goal="read the stories from users", tech=1.0)
     assert session.goal == "read the stories from users"
     assert any(s.action == "click" and s.target_label == "Stories" for s in session.steps), [s.model_dump() for s in session.steps]
 
@@ -71,7 +74,8 @@ def test_hands_request_goal_precedence(vault):
 
 async def test_full_pipeline_with_hands(vault, settings, brief, site_url):
     store = Store(settings.db_path)
-    pipe = Pipeline(settings, vault, store, EventBus(store), MockProvider())
+    runtime = SettingsStore(settings.data_dir / "settings.json", defaults_from(settings))
+    pipe = Pipeline(settings, vault, store, EventBus(store), runtime)
     hands = HandsRequest(url=f"{site_url}/fitdesk-cluttered/", personas=3, max_steps=12, archetypes=["mother"])
     req = RunRequest(brief=brief, crowd_size=120, hands=hands)
     run_id = pipe.start(req)

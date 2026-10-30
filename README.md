@@ -8,40 +8,54 @@ Before you build, ask the crowd. Describe an idea in plain text and Crowdpod:
 
 It's a simulation. Use it to decide who to talk to first and what to ask them.
 
-## Run it
+## Set up
 
-Requirements: Python 3.11 with [uv](https://docs.astral.sh/uv/), Node.js 20.9+, and Chromium for Playwright.
-
-```sh
-# backend: API on http://127.0.0.1:8000
-cd backend
-uv sync
-uv run playwright install chromium   # once, for the hands
-uv run crowdpod serve
-
-# frontend: UI on http://localhost:3000 (second terminal)
-cd frontend
-npm install
-npm run dev
-```
-
-Open http://localhost:3000/app/ and describe an idea.
-
-To serve the UI as static files instead, run `npm run build` and serve `frontend/out/` with any static server.
-
-## Model
-
-By default Crowdpod uses its **offline simulation**. It's rule-based, reproducible, and needs no network or key. That's fine for tests and as a stage backup, but it only reads ideas through keywords. For real results, point it at any OpenAI-compatible endpoint:
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and [Node.js](https://nodejs.org) 20.9 or newer. uv installs the right Python (3.11) by itself.
 
 ```sh
-# backend/env.example lists every setting
-export CROWDPOD_LLM_PROVIDER=openai
-export CROWDPOD_LLM_BASE_URL=...      # the endpoint's /v1 URL
-export CROWDPOD_LLM_API_KEY=...       # if the endpoint needs one
-export CROWDPOD_LLM_MODEL=...
+# macOS / Linux
+scripts/setup.sh
+scripts/start.sh
+
+# Windows (PowerShell)
+.\scripts\setup.ps1
+.\scripts\start.ps1
 ```
 
-The header of the app shows which provider is active.
+Setup installs the exact versions pinned in `backend/uv.lock` and `frontend/package-lock.json`, plus the Chromium the browser agents use, so everyone gets the same environment. Then open http://localhost:3000/app/.
+
+If you prefer pip, `backend/requirements.txt` lists the same pinned packages; install them into a Python 3.11 virtual environment, then run `pip install -e backend` and `playwright install chromium`.
+
+## Choose the brain
+
+Open **Settings** in the app. The brain plays every persona: their verdicts, their thoughts and every click on a website.
+
+| Brain | What you need |
+|---|---|
+| Offline simulation (default) | Nothing. Free and works without internet, but rule-based: it reads ideas by keywords. Fine for rehearsals and tests, not for real verdicts. |
+| Claude | An Anthropic API key. Defaults to Claude Opus 5.5; Sonnet 5.5 and Haiku 5.5 are faster and cheaper. |
+| Any OpenAI-compatible model | An address and usually a key: OpenAI, OpenRouter, Groq, Together, or a model on your own computer through LM Studio or Ollama (no key). |
+
+**Test connection** checks the model before you save. Each run remembers which brain it used, and the header shows the current one.
+
+## Use it from Claude Code, Codex or Claude Desktop (MCP)
+
+Crowdpod includes an MCP server, so your own AI tool can use it with its own sign-in and subscription. Crowdpod never sees that login. **Settings → MCP** shows the exact command for your computer, for example:
+
+```sh
+claude mcp add crowdpod -- uv --directory /path/to/crowdpod/backend run crowdpod mcp
+```
+
+Keep `scripts/start` running. Your agent can then:
+- run crowd simulations and read the results, BRD and PRD;
+- interview personas;
+- play a persona itself in a real Chromium window, seeing a screenshot of each page and choosing every click.
+
+## Security
+
+- **API keys** stay on the computer running Crowdpod, in `data/settings.json`, which is created readable by its owner only and ignored by git. They're never sent back to the browser, are removed from error messages, and are only reused for the provider and address they were entered for.
+- **The API** listens on `127.0.0.1` only. Model settings can only be read or changed from that machine, and requests with an unexpected `Host` header are refused, which blocks DNS-rebinding attacks from other websites. To reach it under another hostname, list it in `CROWDPOD_ALLOWED_HOSTS`.
+- **Browser agents** only visit `http(s)` addresses. Website text goes to the model fenced off as untrusted content, and personas are told not to type personal data. The MCP server runs over stdio, so only the tool that started it can talk to it.
 
 ## Without the UI
 
@@ -50,7 +64,7 @@ cd backend
 uv run crowdpod run path/to/brief.json --size 500 --url https://your-site.example --hands 5
 ```
 
-The brief format is `IdeaBrief` in `backend/src/crowdpod/models.py`. `backend/tests/fixtures/brief-fitness.json` is an example.
+The brief format is `IdeaBrief` in `backend/src/crowdpod/models.py`. `backend/tests/fixtures/brief-fitness.json` is an example. Environment variables in `backend/env.example` set the defaults until you save something in Settings.
 
 ## Personas
 
@@ -59,10 +73,12 @@ Personas live in `vault/`, an Obsidian vault. Each archetype is one Markdown not
 ## Tests
 
 ```sh
-cd backend && uv run pytest              # engine, API, real-browser hands
+cd backend && uv run pytest              # engine, API, every brain (against a local fake), MCP, security, real-browser hands
 cd frontend && npm run typecheck && npm run lint && npm run build
 cd frontend && npx playwright test       # landing page; needs the built site on :3000
 ```
+
+The tests never call a paid model: a local fake server answers in both the Anthropic and OpenAI formats.
 
 ## License
 

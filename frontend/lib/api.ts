@@ -178,10 +178,47 @@ export const api = {
     }),
   eventsUrl: (id: string) => `${API_URL}/api/runs/${id}/events`,
   artifactUrl: (id: string, path: string) => `${API_URL}/api/runs/${id}/artifacts/${path}`,
+  settings: () => call<PublicSettings>("/api/settings"),
+  saveSettings: (brain: BrainForm, browser: BrowserSettings) =>
+    call<PublicSettings>("/api/settings", { method: "PUT", body: JSON.stringify({ brain, browser }) }),
+  testBrain: (brain: BrainForm) =>
+    call<{ ok: boolean; label: string; ms: number; detail: string }>("/api/settings/test", {
+      method: "POST",
+      body: JSON.stringify(brain),
+    }),
+  listModels: (brain: BrainForm) =>
+    call<{ models: string[] }>("/api/settings/models", { method: "POST", body: JSON.stringify(brain) }),
+  mcpSetup: () =>
+    call<{ backend_dir: string; claude_code: string; codex: string; claude_desktop: string }>("/api/settings/mcp"),
 };
 
+export type BrainProvider = "mock" | "anthropic" | "openai";
+
+export interface BrowserSettings {
+  show_windows: boolean;
+  slow_mo_ms: number;
+  parallel: number;
+}
+
+/** What the settings form sends. api_key: null keeps the saved key, "" removes it. */
+export interface BrainForm {
+  provider: BrainProvider;
+  base_url: string;
+  api_key: string | null;
+  model: string;
+  concurrency: number;
+  batch_size: number;
+  effort: "low" | "medium" | "high";
+}
+
+/** What the server sends back: never the key itself. */
+export interface PublicSettings {
+  brain: Omit<BrainForm, "api_key"> & { has_key: boolean; key_hint: string };
+  browser: BrowserSettings;
+}
+
 export const providerLabel = (p: string) =>
-  p === "mock" ? "Offline simulation (rule-based)" : `Model: ${p}`;
+  p === "mock" ? "Offline simulation (rule-based)" : `Brain: ${p}`;
 
 export const money = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 export const pct = (n: number) => `${Math.round(n * 100)}%`;

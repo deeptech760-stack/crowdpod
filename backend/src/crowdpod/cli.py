@@ -10,9 +10,9 @@ from pathlib import Path
 
 from .config import get_settings
 from .events import EventBus
-from .llm import get_provider
 from .models import HandsRequest, IdeaBrief, RunRequest
 from .pipeline import Pipeline
+from .runtime import SettingsStore, defaults_from
 from .store import Store
 from .vault import Vault
 
@@ -23,12 +23,11 @@ async def _run(args: argparse.Namespace) -> int:
     hands = HandsRequest(url=args.url, personas=args.hands, max_steps=args.max_steps) if args.url else None
     req = RunRequest(brief=brief, crowd_size=args.size, seed=args.seed, hands=hands)
     store = Store(settings.db_path)
-    provider = get_provider(settings)
-    pipe = Pipeline(settings, Vault(settings.vault_dir), store, EventBus(store), provider)
+    runtime = SettingsStore(settings.data_dir / "settings.json", defaults_from(settings))
+    pipe = Pipeline(settings, Vault(settings.vault_dir), store, EventBus(store), runtime)
     run_id = pipe.start(req)
-    print(f"run {run_id} with provider {provider.name}", file=sys.stderr)
+    print(f"run {run_id} with brain {runtime.current().brain.label}", file=sys.stderr)
     await pipe.execute(run_id, req)
-    await provider.aclose()
     run = store.get_run(run_id)
     assert run
     if run["status"] != "finished":
@@ -56,12 +55,18 @@ def main() -> None:
     r.add_argument("--url", help="website for the Hands to use")
     r.add_argument("--hands", type=int, default=5)
     r.add_argument("--max-steps", type=int, default=15)
+    sub.add_parser("mcp", help="run the MCP server over stdio (for Claude Code, Codex, Claude Desktop)")
     s = sub.add_parser("serve", help="start the API")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     if args.cmd == "run":
         sys.exit(asyncio.run(_run(args)))
+    if args.cmd == "mcp":
+        from .mcp_server import main as mcp_main
+
+        mcp_main()
+        return
     import uvicorn
 
     uvicorn.run("crowdpod.api:app", host=args.host, port=args.port)

@@ -76,7 +76,14 @@ class LLMProvider(ABC):
   - Quotes come from the archetype's voice lines.
   - In the browser it clicks links that match its goal words, scrolls otherwise, and gives up when out of patience.
   - **Limit:** it only understands ideas through keywords. That's fine for tests and as a stage backup, but it isn't a simulation of judgement. Any idea outside the archetypes' vocabulary gets flat results.
-- **`openai`, any OpenAI-compatible endpoint.** It's configured with `CROWDPOD_LLM_BASE_URL`, `CROWDPOD_LLM_API_KEY` and `CROWDPOD_LLM_MODEL`, and is what real use needs. Which endpoint to use, and whether it costs anything, is the operator's decision. Nothing is configured by default.
+- **`anthropic`, Claude** (`llm/anthropic_provider.py`), through the official `anthropic` SDK with the user's API key:
+  - JSON answers come back through structured outputs (`messages.parse` with the Pydantic schema), so they are checked against the schema;
+  - an effort level is set per brain (default medium);
+  - server-side refusal fallback (`fallbacks: "default"`) is turned on;
+  - refusals and truncated replies raise errors, which the crowd runner catches (see below).
+- **`openai`, any OpenAI-compatible endpoint** (`llm/openai_compat.py`): OpenAI, OpenRouter, Groq, Together, or a local LM Studio or Ollama server.
+
+Which brain to use, and whether it costs anything, is the operator's decision. It's chosen on the **Settings** page and saved to `data/settings.json` (`runtime.py`); environment variables only supply defaults. Each run takes a snapshot of the settings when it's queued and builds its own model client, so changing settings mid-run doesn't affect a running simulation.
 
 Model output is checked against Pydantic schemas. A reply that fails is retried once with the error attached. If a whole crowd batch fails, that batch falls back to the offline provider, and the run emits `crowd.degraded` so the UI can say so.
 
@@ -146,8 +153,42 @@ Model output is checked against Pydantic schemas. A reply that fails is retried 
 | GET | `/api/runs/{id}/hands` | browser sessions with steps |
 | GET | `/api/runs/{id}/artifacts/{path}` | screenshots (path traversal blocked) |
 | POST | `/api/runs/{id}/personas/{pid}/interview` | ask one persona a question; they answer in character |
+| GET / PUT | `/api/settings` | the brain and browser settings; the key is never returned, only `has_key` and the last 4 characters |
+| POST | `/api/settings/test` | one tiny JSON request to check a model, without saving |
+| POST | `/api/settings/models` | model names the endpoint offers |
+| GET | `/api/settings/mcp` | copy-paste MCP setup for Claude Code, Codex and Claude Desktop |
 
 CORS allows any `localhost` or `127.0.0.1` origin, so the UI dev server and the static build can both call the API.
+
+### Security
+
+- **Keys.**
+  - Stored only in `data/settings.json`, written with owner-only permissions and git-ignored.
+  - Never returned by the API.
+  - Removed from any error text before it's returned.
+  - A saved key is reused only when the provider *and* the address are unchanged, so it can never be sent to a different service than the one it was entered for.
+- **Who can change settings.** The settings endpoints answer only requests from the same machine (loopback). Every endpoint rejects unexpected `Host` headers (`TrustedHostMiddleware`), which blocks DNS-rebinding attacks from other websites; extra hostnames go in `CROWDPOD_ALLOWED_HOSTS`. CORS only allows localhost origins, so other sites can't read responses.
+- **Browsing.**
+  - Agents visit only `http(s)` URLs.
+  - Page text reaches the model fenced as untrusted content with an explicit "not instructions" note.
+  - The action set is fixed: click, type, scroll, back, done, give up.
+  - Personas are told never to type personal or payment data.
+- **MCP.**
+  - Runs over stdio, so only the client that launched it can call it.
+  - At most 3 live visits at once and 40 steps each.
+  - Visit logs are saved under `data/mcp-visits/`.
+
+## 6a. MCP server (`crowdpod mcp`)
+
+Lets Claude Code, Codex, Claude Desktop or any MCP client use Crowdpod with its own sign-in and subscription. Crowdpod never sees that login: using a Claude.ai or ChatGPT login inside a third-party app isn't permitted, so this is the supported way to bring those tools in. It has two groups of tools:
+
+- **Crowd runs** go through the running API, so they also appear in the web UI: `list_personas`, `start_simulation`, `get_results`, `get_documents`, `get_browser_sessions`, `interview_persona`.
+- **Live visits** put the client's own model in charge of one persona's browser:
+  - `visit_as_persona` returns the persona's full system prompt, the page as text and a screenshot;
+  - the client then chooses each `browser_step`;
+  - `end_visit` closes the browser and records the outcome.
+
+  This is the "a real model drives the browser" mode, without Crowdpod needing any API key.
 
 ## 6. Frontend (`frontend/`)
 

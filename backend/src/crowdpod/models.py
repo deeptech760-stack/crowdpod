@@ -239,6 +239,17 @@ class HandsSession(BaseModel):
     steps: list[HandsStep]
 
 
+def _web_url(v: str) -> str:
+    """Browser agents only visit web pages: no file://, javascript: or other schemes."""
+    from urllib.parse import urlparse
+
+    v = v.strip()
+    parsed = urlparse(v)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("the website address must start with http:// or https://")
+    return v
+
+
 class HandsRequest(BaseModel):
     url: str
     personas: int = Field(default=5, ge=1, le=20)
@@ -246,6 +257,11 @@ class HandsRequest(BaseModel):
     archetypes: list[str] | None = None  # segments to send first; the rest are chosen automatically
     goal: str | None = Field(default=None, max_length=300)  # what every visitor tries to do
     goals: dict[str, str] | None = None  # per-segment goal; overrides `goal`
+
+    @field_validator("url")
+    @classmethod
+    def _check_url(cls, v: str) -> str:
+        return _web_url(v)
 
     def goal_for(self, archetype: Archetype) -> str:
         return (self.goals or {}).get(archetype.id) or self.goal or archetype.goals_on_site[0]

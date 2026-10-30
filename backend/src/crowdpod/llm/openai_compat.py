@@ -178,5 +178,9 @@ class OpenAICompatProvider(LLMProvider):
         )
         return clean_chat_text(extract_chat_completion_text(response))
 
+    async def list_models(self) -> list[str]:
+        page = await self.client.models.list()
+        return sorted(m.id for m in page.data)
+
     async def aclose(self) -> None:
         await self.client.close()

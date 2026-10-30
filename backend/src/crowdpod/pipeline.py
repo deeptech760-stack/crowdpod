@@ -7,7 +7,7 @@ import json
 import logging
 import secrets
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from .aggregate import summarise
@@ -15,7 +15,9 @@ from .architect import Architect
 from .config import Settings
 from .crowd import CrowdRunner
 from .events import EventBus
+from .llm import make_provider
 from .llm.base import LLMProvider
+from .runtime import RuntimeSettings, SettingsStore
 from .models import CrowdSummary, HandsSession, HandsStep, Persona, Reaction, RunRequest
 from .sampler import CrowdSampler
 from .store import Store
@@ -62,27 +64,40 @@ class Pipeline:
     vault: Vault
     store: Store
     bus: EventBus
-    provider: LLMProvider
+    runtime: SettingsStore
+    # settings captured when each run was queued, so a change mid-run doesn't affect it
+    _snapshots: dict[str, RuntimeSettings] = field(default_factory=dict)
 
     def start(self, request: RunRequest) -> str:
+        snapshot = self.runtime.current()
+        snapshot.brain.check_ready()
         run_id = new_run_id()
-        self.store.create_run(run_id, request, self.provider.name)
+        self.store.create_run(run_id, request, snapshot.brain.label)
+        self._snapshots[run_id] = snapshot
         return run_id
 
     async def execute(self, run_id: str, request: RunRequest) -> None:
+        snapshot = self._snapshots.pop(run_id, None) or self.runtime.current()
         emit = self.bus.emitter(run_id)
         self.store.set_status(run_id, "running")
+        provider: LLMProvider | None = None
         try:
-            await emit("run.started", {"provider": self.provider.name, "brief": request.brief.model_dump()})
-            await self._run(run_id, request, emit)
+            provider = make_provider(snapshot.brain)
+            await emit("run.started", {"provider": snapshot.brain.label, "brief": request.brief.model_dump()})
+            await self._run(run_id, request, emit, provider, snapshot)
             self.store.set_status(run_id, "finished")
             await emit("run.finished", {})
         except Exception as e:
             logger.exception("run %s failed", run_id)
             self.store.set_status(run_id, "failed", f"{type(e).__name__}: {e}")
             await emit("run.failed", {"error": f"{type(e).__name__}: {e}"})
+        finally:
+            if provider:
+                await provider.aclose()
 
-    async def _run(self, run_id: str, req: RunRequest, emit: Emit) -> None:
+    async def _run(
+        self, run_id: str, req: RunRequest, emit: Emit, provider: LLMProvider, snapshot: RuntimeSettings
+    ) -> None:
         brief = req.brief
         archetypes = self.vault.archetypes
 
@@ -109,8 +124,8 @@ class Pipeline:
         async def on_degraded(ids: list[str], error: str) -> None:
             await emit("crowd.degraded", {"personas": len(ids), "error": error})
 
-        runner = CrowdRunner(self.vault, self.provider, batch_size=self.settings.crowd_batch_size,
-                             concurrency=self.settings.llm_concurrency)
+        runner = CrowdRunner(self.vault, provider, batch_size=snapshot.brain.batch_size,
+                             concurrency=snapshot.brain.concurrency)
         reactions = await runner.run(brief, crowd, on_reaction, on_degraded)
         await emit("stage.done", {"stage": "crowd"})
 
@@ -120,7 +135,7 @@ class Pipeline:
         await emit("summary", summary.model_dump())
 
         # 5. architect
-        docs = await Architect(self.vault, self.provider).write(brief, summary, crowd, reactions)
+        docs = await Architect(self.vault, provider).write(brief, summary, crowd, reactions)
         self.store.save_docs(run_id, docs)
         out = self.settings.artifacts_dir / run_id
         out.mkdir(parents=True, exist_ok=True)
@@ -132,29 +147,33 @@ class Pipeline:
         sessions: list[HandsSession] = []
         if req.hands:
             chosen = pick_hands_personas(crowd, reactions, summary, req.hands.personas, req.hands.archetypes)
-            sessions = await self._hands(run_id, req, chosen, emit)
+            sessions = await self._hands(run_id, req, chosen, emit, provider, snapshot)
 
         # 7. report
         report = {
-            "run_id": run_id, "provider": self.provider.name, "brief": brief.model_dump(),
+            "run_id": run_id, "provider": snapshot.brain.label, "brief": brief.model_dump(),
             "summary": summary.model_dump(), "hands": [s.model_dump() for s in sessions],
         }
         (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    async def _hands(self, run_id: str, req: RunRequest, chosen: list[Persona], emit: Emit) -> list[HandsSession]:
+    async def _hands(
+        self, run_id: str, req: RunRequest, chosen: list[Persona], emit: Emit,
+        provider: LLMProvider, snapshot: RuntimeSettings,
+    ) -> list[HandsSession]:
         from .hands.agent import run_session
         from .hands.driver import PlaywrightBrowser
 
         assert req.hands
         hands = req.hands
         shots = self.settings.artifacts_dir / run_id / "shots"
-        semaphore = asyncio.Semaphore(self.settings.hands_concurrency)
+        semaphore = asyncio.Semaphore(snapshot.browser.parallel)
         await emit("hands.started", {"url": hands.url, "personas": [p.id for p in chosen]})
 
         async def on_step(p: Persona, step: HandsStep) -> None:
             await emit("hands.step", {"persona_id": p.id, "name": p.name, "step": step.model_dump()})
 
-        async with PlaywrightBrowser(headless=self.settings.hands_headless, slow_mo=self.settings.hands_slow_mo) as browser:
+        browser_cfg = snapshot.browser
+        async with PlaywrightBrowser(headless=not browser_cfg.show_windows, slow_mo=browser_cfg.slow_mo_ms) as browser:
 
             async def one(p: Persona) -> HandsSession:
                 async with semaphore:
@@ -162,7 +181,7 @@ class Pipeline:
                     driver = await browser.driver(p.device)
                     try:
                         session = await run_session(
-                            driver=driver, provider=self.provider, vault=self.vault, persona=p, archetype=arch,
+                            driver=driver, provider=provider, vault=self.vault, persona=p, archetype=arch,
                             url=hands.url, goal=hands.goal_for(arch), max_steps=hands.max_steps,
                             shots_dir=shots, shot_prefix=p.id, on_step=on_step,
                         )

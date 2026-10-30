@@ -927,3 +927,180 @@
     animation: none;
   }
 }
+
+/* settings */
+.app-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--green);
+}
+.app-link:hover {
+  background: var(--paper);
+}
+.settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.brain-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.brain-option {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  text-align: left;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.brain-option strong {
+  font-size: 16px;
+}
+.brain-option small {
+  color: var(--muted);
+  line-height: 1.55;
+}
+.brain-option.on {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px var(--green);
+}
+.brain-option .tag {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  margin: 0;
+}
+.brain-fields {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.field-action {
+  align-content: end;
+}
+.field-action .chip {
+  justify-content: center;
+  min-height: 46px;
+}
+.small-link {
+  justify-self: start;
+  font-size: 12px;
+}
+.advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--green);
+  margin-bottom: 12px;
+}
+.advanced small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  line-height: 1.5;
+}
+.toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green);
+}
+.settings .app-card > h2 {
+  margin: 8px 0 4px;
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.settings-actions .button:disabled,
+.chip:disabled {
+  opacity: 0.6;
+}
+.test-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.test-result.ok {
+  background: var(--mint);
+  color: var(--green);
+}
+.test-result.bad {
+  background: #fbe9e4;
+  color: #a33a24;
+}
+.mcp-hint {
+  color: var(--muted);
+  margin: 14px 0 8px;
+  line-height: 1.6;
+}
+.code-box {
+  position: relative;
+  background: #0f1d19;
+  color: #dbeee5;
+  border-radius: 14px;
+  padding: 16px 52px 16px 16px;
+}
+.code-box pre {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.code-box .copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.1);
+  color: #fff;
+}
+.tool-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  line-height: 1.6;
+}
+@media (max-width: 760px) {
+  .brain-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-link {
+    padding: 9px 6px;
+  }
+}
+.settings .mini-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

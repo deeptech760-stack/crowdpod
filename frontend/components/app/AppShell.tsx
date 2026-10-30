@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Settings } from "lucide-react";
 import { Logo } from "../landing/UI";
 import { API_URL, api, providerLabel } from "@/lib/api";
 
@@ -22,10 +22,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </Link>
         <div className="app-header-actions">
           {provider && (
-            <span className={`provider-badge ${provider === "mock" ? "offline" : ""}`}>
+            <a
+              className={`provider-badge ${provider === "mock" ? "offline" : ""}`}
+              href="/app/settings/"
+              title="Change the brain in Settings"
+            >
               <span className="status-dot" /> {providerLabel(provider)}
-            </span>
+            </a>
           )}
+          <a className="app-link" href="/app/settings/">
+            <Settings size={16} /> Settings
+          </a>
           <a className="app-new" href="/app/">
             <Plus size={16} /> New simulation
           </a>

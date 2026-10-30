@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-from ..config import Settings
+from ..runtime import BrainSettings
 from .base import LLMProvider
 from .mock import MockProvider
 
 
-def get_provider(settings: Settings) -> LLMProvider:
-    if settings.llm_provider == "mock":
+def make_provider(brain: BrainSettings) -> LLMProvider:
+    """A fresh client for one run or request; the caller closes it with aclose()."""
+    if brain.provider == "mock":
         return MockProvider()
-    if settings.llm_provider == "openai":
-        from .openai_compat import OpenAICompatProvider
+    brain.check_ready()
+    if brain.provider == "anthropic":
+        from .anthropic_provider import AnthropicProvider
 
-        return OpenAICompatProvider(
-            base_url=settings.llm_base_url, api_key=settings.llm_api_key, model=settings.llm_model
-        )
-    raise ValueError(f"unknown CROWDPOD_LLM_PROVIDER {settings.llm_provider!r} (use 'mock' or 'openai')")
+        # base_url is left empty for the official endpoint; tests point it at a local fake
+        return AnthropicProvider(api_key=brain.api_key, model=brain.model, base_url=brain.base_url, effort=brain.effort)
+    from .openai_compat import OpenAICompatProvider
+
+    return OpenAICompatProvider(base_url=brain.base_url, api_key=brain.api_key, model=brain.model)
 
 
-__all__ = ["LLMProvider", "MockProvider", "get_provider"]
+__all__ = ["LLMProvider", "MockProvider", "make_provider"]
