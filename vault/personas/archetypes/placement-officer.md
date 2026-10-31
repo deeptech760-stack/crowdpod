@@ -9,6 +9,7 @@ age: [32, 55]
 profession: training and placement officer at an engineering college
 city: Bengaluru
 budget_month: [0, 3000]
+purchase_budget: [20000, 70000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [40, 90]
 tech_comfort: [0.35, 0.75]
 price_sensitivity: [0.4, 0.8]

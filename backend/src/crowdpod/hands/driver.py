@@ -3,12 +3,14 @@ driver could replace the direct Playwright one without changing the agent."""
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 from ..models import HandsDecision, Observation
+from ..netguard import check_url, guard_page
 
 OBSERVE_JS = (Path(__file__).with_name("observe.js")).read_text(encoding="utf-8")
 
@@ -62,19 +64,23 @@ class PlaywrightBrowser:
         if self._pw:
             await self._pw.stop()
 
-    async def driver(self, device: str) -> "PlaywrightDriver":
+    async def driver(self, device: str, *, allow_private: bool = True, on_block=None) -> "PlaywrightDriver":  # noqa: ANN001
         assert self._browser, "use PlaywrightBrowser as an async context manager"
         w, h, mobile = VIEWPORTS.get(device, VIEWPORTS["mid-android"])
         context = await self._browser.new_context(
-            viewport={"width": w, "height": h}, is_mobile=mobile, has_touch=mobile, locale="en-IN"
+            viewport={"width": w, "height": h}, is_mobile=mobile, has_touch=mobile, locale="en-IN",
+            accept_downloads=False, service_workers="block", permissions=[],
         )
-        return PlaywrightDriver(context, await context.new_page())
+        # every request the page makes is checked, not just the first address
+        await guard_page(context, allow_private=allow_private, on_block=on_block)
+        return PlaywrightDriver(context, await context.new_page(), allow_private=allow_private)
 
 
 class PlaywrightDriver(BrowserDriver):
-    def __init__(self, context: BrowserContext, page: Page):
+    def __init__(self, context: BrowserContext, page: Page, *, allow_private: bool = True):
         self.context = context
         self.page = page
+        self.allow_private = allow_private
 
     async def _settle(self) -> None:
         try:
@@ -82,8 +88,10 @@ class PlaywrightDriver(BrowserDriver):
             await self.page.wait_for_load_state("networkidle", timeout=2000)
         except Exception:
             pass  # busy pages never go idle; carry on with what is there
+        await self.page.wait_for_timeout(600)  # let fade-in animations finish, as a person would wait
 
     async def goto(self, url: str) -> None:
+        check_url(url, allow_private=self.allow_private)
         await self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
         await self._settle()
 
@@ -91,11 +99,13 @@ class PlaywrightDriver(BrowserDriver):
         return Observation.model_validate(await self.page.evaluate(OBSERVE_JS))
 
     async def act(self, d: HandsDecision) -> str:
+        if d.action in ("click", "type") and not re.fullmatch(r"[\w-]{1,20}", d.target):
+            return f"no element {d.target[:40]!r} on this page"  # ids are short tokens; nothing else reaches a selector
         try:
             if d.action == "click":
                 await self.page.click(f'[data-cp-id="{d.target}"]', timeout=5000)
             elif d.action == "type":
-                await self.page.fill(f'[data-cp-id="{d.target}"]', d.text, timeout=5000)
+                await self.page.fill(f'[data-cp-id="{d.target}"]', d.text[:200], timeout=5000)
             elif d.action == "scroll":
                 h = self.page.viewport_size["height"] if self.page.viewport_size else 800
                 await self.page.mouse.wheel(0, -0.8 * h if d.text == "up" else 0.8 * h)

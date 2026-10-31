@@ -9,6 +9,7 @@ age: [24, 38]
 profession: software engineer at an IT services company
 city: Bengaluru
 budget_month: [300, 1500]
+purchase_budget: [30000, 150000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [30, 90]
 tech_comfort: [0.7, 0.95]
 price_sensitivity: [0.3, 0.6]

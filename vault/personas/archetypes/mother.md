@@ -9,6 +9,7 @@ age: [29, 46]
 profession: mother of two, part-time home tutor
 city: Bengaluru
 budget_month: [0, 400]
+purchase_budget: [8000, 25000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [20, 45]
 tech_comfort: [0.3, 0.7]
 price_sensitivity: [0.7, 0.95]

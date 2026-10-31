@@ -4,15 +4,18 @@ version = "0.1.0"
 description = "Test a product idea on a simulated crowd before you build it."
 requires-python = ">=3.11,<3.13"
 license = { text = "AGPL-3.0-only" }
+# upper bounds: the major versions the tests run on (the MCP server is also installed with uvx,
+# which resolves fresh versions instead of reading uv.lock)
 dependencies = [
-  "fastapi>=0.115",
-  "uvicorn>=0.30",
-  "pydantic>=2.7",
-  "pyyaml>=6.0",
-  "openai>=1.40",
-  "playwright>=1.45",
-  "anthropic>=1.0",
-  "mcp>=1.10",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "pydantic>=2.7,<3",
+  "pyyaml>=6.0,<7",
+  "httpx>=0.27,<1",
+  "openai>=3.0,<4",
+  "playwright>=1.45,<2",
+  "anthropic>=2.0,<3",
+  "mcp>=2.0,<3",
 ]
 
 [project.scripts]

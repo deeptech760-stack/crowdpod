@@ -9,6 +9,7 @@ age: [25, 42]
 profession: campus hiring lead at a mid-size IT company
 city: Bengaluru
 budget_month: [0, 5000]
+purchase_budget: [30000, 120000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [15, 40]
 tech_comfort: [0.65, 0.95]
 price_sensitivity: [0.2, 0.5]

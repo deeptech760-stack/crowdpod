@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Verdict = Literal["adopt", "maybe", "reject"]
 PricePeriod = Literal["one_time", "month", "year", "free"]
@@ -16,14 +16,24 @@ RunStatus = Literal["queued", "running", "finished", "failed"]
 Range = tuple[float, float]
 
 
+def inr(amount: float) -> str:
+    """Rupees with Indian digit grouping: 189900 -> ₹1,89,900."""
+    digits = str(abs(round(amount)))
+    if len(digits) > 3:
+        head, tail = digits[:-3], digits[-3:]
+        pairs = [head[max(i - 2, 0):i] for i in range(len(head), 0, -2)]
+        digits = ",".join(reversed(pairs)) + "," + tail
+    return ("-" if amount < 0 else "") + "₹" + digits
+
+
 class IdeaBrief(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     pitch: str = Field(min_length=10, max_length=4000)
-    category: str = ""
+    category: str = Field(default="", max_length=80)
     price: float = Field(default=0, ge=0)
-    currency: str = "INR"
+    currency: str = Field(default="INR", max_length=8)
     price_period: PricePeriod = "month"
-    target_hint: str = ""
+    target_hint: str = Field(default="", max_length=600)
     url: str | None = None
     competitor_url: str | None = None
 
@@ -37,6 +47,26 @@ class IdeaBrief(BaseModel):
         if self.price_period == "one_time":
             return round(self.price / 12, 2)  # treated as a year of use
         return self.price
+
+    @property
+    def one_time(self) -> bool:
+        return self.price_period == "one_time"
+
+    @property
+    def price_unit(self) -> Literal["one_time", "month"]:
+        return "one_time" if self.one_time else "month"
+
+    @property
+    def basis_price(self) -> float:
+        """The price in the terms a person weighs it: the whole amount for a one-off purchase
+        (a phone, a laptop), per month for anything paid repeatedly."""
+        return self.price if self.one_time else self.monthly_price
+
+    def price_text(self, amount: float | None = None) -> str:
+        amount = self.basis_price if amount is None else amount
+        if self.price_period == "free" and amount == 0:
+            return "free"
+        return f"{inr(amount)} one-time" if self.one_time else f"{inr(amount)}/month"
 
     def text(self) -> str:
         return " ".join([self.name, self.category, self.pitch, self.target_hint]).lower()
@@ -54,7 +84,7 @@ class Voice(BaseModel):
 
 
 class Archetype(BaseModel):
-    """One handwritten persona note from vault/personas/archetypes."""
+    """One persona note: handwritten in vault/personas/archetypes, or generated for an idea."""
 
     id: str
     label: str
@@ -64,7 +94,8 @@ class Archetype(BaseModel):
     age: Range
     profession: str
     city: str = ""
-    budget_month: Range
+    budget_month: Range  # what they spend each month on apps and subscriptions
+    purchase_budget: Range = (0, 0)  # what they'd spend on one big one-off purchase; 0 means 12x monthly
     patience_seconds: Range
     tech_comfort: Range
     price_sensitivity: Range
@@ -82,6 +113,8 @@ class Archetype(BaseModel):
     voice: Voice = Voice()
     body: str = ""  # Markdown prose below the frontmatter
     source: str = ""  # path of the note, relative to the vault
+    generated_for: str = ""  # the idea this persona was generated for; empty for handwritten ones
+    evidence: list[str] = []  # research facts this persona is based on
 
 
 class Persona(BaseModel):
@@ -101,16 +134,26 @@ class Persona(BaseModel):
     mood: str
     device: str
     budget_month: int
+    purchase_budget: int = 0
     patience_seconds: int
     tech_comfort: float
     price_sensitivity: float
     sentiment_bias: float
 
-    def card(self, archetype: Archetype) -> str:
+    def budget_for(self, brief: IdeaBrief) -> int:
+        """The budget to weigh this price against: one-off purchase money or monthly spend."""
+        return self.purchase_budget if brief.one_time else self.budget_month
+
+    def card(self, archetype: Archetype, brief: IdeaBrief | None = None) -> str:
         """Short description used when many personas share one model call."""
+        money = (
+            f"Can spend about ₹{self.purchase_budget:,} on a big one-off purchase"
+            if brief is not None and brief.one_time
+            else f"Spends about ₹{self.budget_month:,}/month on apps and subscriptions"
+        )
         return (
             f"[{self.id}] {self.name}, {self.age}, {self.profession} ({archetype.label}), {self.city}. "
-            f"Mood: {self.mood}. Budget for apps: about ₹{self.budget_month}/month. "
+            f"Mood: {self.mood}. {money}. "
             f"Price sensitivity {self.price_sensitivity:.2f}, tech comfort {self.tech_comfort:.2f}, "
             f"optimism {self.sentiment_bias:+.2f}. Device: {self.device}. "
             f"Cares about: {', '.join(archetype.interests[:6])}. "
@@ -166,7 +209,8 @@ class SegmentStats(BaseModel):
 
 class CrowdSummary(BaseModel):
     size: int
-    monthly_price: float
+    monthly_price: float  # the price compared against budgets, in `price_unit` terms
+    price_unit: Literal["one_time", "month"] = "month"
     adoption_rate: float
     interest_rate: float
     median_wtp: float
@@ -185,6 +229,99 @@ class Documents(BaseModel):
     prd_md: str
 
 
+# ---------------------------------------------------------------- research and generated audiences
+
+
+def _bounded(data: Any, *, text: int, items: int, where: str) -> Any:
+    """Reject oversized text and lists anywhere in user- or agent-supplied data."""
+    if isinstance(data, str) and len(data) > text:
+        raise ValueError(f"{where}: a text field is longer than {text} characters")
+    if isinstance(data, (list, tuple)):
+        if len(data) > items:
+            raise ValueError(f"{where}: a list has more than {items} items")
+        for v in data:
+            _bounded(v, text=text, items=items, where=where)
+    if isinstance(data, dict):
+        for v in data.values():
+            _bounded(v, text=text, items=items, where=where)
+    return data
+
+
+class Source(BaseModel):
+    title: str = Field(default="", max_length=300)
+    url: str = Field(max_length=2000)
+
+    @field_validator("url")
+    @classmethod
+    def _web_only(cls, v: str) -> str:
+        # rendered as a link in the UI: only real web addresses, never javascript: or data:
+        parsed = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(v.strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("source links must be http:// or https:// addresses")
+        return v.strip()
+
+
+class Research(BaseModel):
+    """What the brain learned about the idea's market before building the crowd."""
+
+    summary: str
+    facts: list[str] = []  # concrete findings, each ideally with a number
+    price_points: list[str] = []  # what comparable products cost
+    buyer_segments: list[str] = []  # who actually buys in this market
+    sources: list[Source] = []
+    grounded: bool = False  # True when it came from a live web search
+
+    @model_validator(mode="before")
+    @classmethod
+    def _limits(cls, data: Any) -> Any:
+        return _bounded(data, text=3000, items=30, where="research")
+
+
+class GeneratedPersona(BaseModel):
+    """One archetype the brain designs for this idea. Ranges are [low, high]."""
+
+    id: str = Field(description="short kebab-case id, e.g. android-flagship-switcher")
+    label: str = Field(description="who they are in 2-4 words, e.g. Android flagship switcher")
+    share: float = Field(ge=0, le=1, description="estimated share of this idea's realistic market")
+    profession: str
+    city: str = ""
+    names: list[str] = Field(min_length=3, description="6-10 common first names for people like this")
+    age: Range
+    budget_month: Range = Field(description="₹ per month they spend on apps and subscriptions")
+    purchase_budget: Range = Field(description="₹ they would spend on one big one-off purchase like this one")
+    patience_seconds: Range = Field(description="seconds they give a confusing website before leaving")
+    tech_comfort: Range = Field(description="0 to 1")
+    price_sensitivity: Range = Field(description="0 to 1")
+    sentiment_bias: Range = Field(description="-1 to 1: how optimistic they are about new products")
+    moods: list[str]
+    devices: list[str] = Field(description="from: budget-android, mid-android, iphone, ipad, laptop, shared-tablet")
+    interests: list[str] = Field(description="single lowercase words or short phrases")
+    pains: list[str]
+    objections: list[str] = Field(description="their realistic reasons to say no")
+    must_haves: list[str]
+    goals_on_site: list[str] = Field(description="what they would try to do on the product's website")
+    who_they_are: str
+    how_they_decide: str
+    how_they_talk: str
+    sample_quotes: list[str] = Field(description="3-5 things they might say about a product like this")
+    evidence: list[str] = Field(description="research facts this persona is based on")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _limits(cls, data: Any) -> Any:
+        return _bounded(data, text=600, items=20, where="persona")
+
+
+class Audience(BaseModel):
+    personas: list[GeneratedPersona] = Field(min_length=3, max_length=10)
+
+
+class DescribedAudience(BaseModel):
+    """The full personas for the people a user described, in the same order."""
+
+    personas: list[GeneratedPersona] = Field(min_length=1, max_length=5)
+
+
 class Observation(BaseModel):
     url: str
     title: str
@@ -192,6 +329,7 @@ class Observation(BaseModel):
     scroll_max: int
     text: str
     elements: list[dict[str, Any]]
+    content: str = ""  # visible text outside links and buttons
 
     def render(self, max_elements: int = 40) -> str:
         lines = [f"Page: {self.title} ({self.url})", f"Scrolled {self.scroll_y}px of {self.scroll_max}px."]
@@ -273,6 +411,26 @@ class RunRequest(BaseModel):
     mix: dict[str, float] | None = None
     seed: int = 7
     hands: HandsRequest | None = None
+    # generated = research the market and design personas for this idea (needs a model brain);
+    # builtin = the handwritten archetypes; both = generated personas plus the handwritten ones
+    audience: Literal["generated", "builtin", "both"] = "generated"
+    audience_size: int = Field(default=6, ge=3, le=10)  # how many personas to generate
+    context_notes: str = Field(default="", max_length=6000)  # what the founder already knows about the market
+    # Personas and research supplied by the caller (e.g. an MCP client that did its own web search);
+    # used instead of asking the brain to research and design them.
+    provided_audience: Audience | None = None
+    provided_research: Research | None = None
+    # people the user describes in a sentence each ("a broke engineering student in Pune");
+    # each becomes a full persona and a segment of the crowd
+    described: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("described")
+    @classmethod
+    def _described(cls, v: list[str]) -> list[str]:
+        out = [d.strip() for d in v if d.strip()]
+        if any(len(d) > 400 for d in out):
+            raise ValueError("describe each person in at most 400 characters")
+        return out
 
 
 class RunEvent(BaseModel):

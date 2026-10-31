@@ -21,7 +21,7 @@ OnDegraded = Callable[[list[str], str], Awaitable[None]]
 def brief_prompt(brief: IdeaBrief) -> str:
     price = "free" if brief.price_period == "free" or brief.price == 0 else (
         f"₹{brief.price:g} {'per ' + brief.price_period if brief.price_period != 'one_time' else 'one-time'}"
-        f" (about ₹{brief.monthly_price:g} a month)"
+        + ("" if brief.one_time else f" (about ₹{brief.monthly_price:g} a month)")
     )
     return f"Product: {brief.name}\nCategory: {brief.category or 'unspecified'}\nPrice: {price}\n\n{brief.pitch}"
 
@@ -53,7 +53,7 @@ class CrowdRunner:
     async def _batch(self, brief: IdeaBrief, personas: list[Persona]) -> tuple[list[Reaction], str | None]:
         archetypes = self.vault.archetypes
         system = self.vault.template("crowd-batch")
-        cards = "\n".join(p.card(archetypes[p.archetype_id]) for p in personas)
+        cards = "\n".join(p.card(archetypes[p.archetype_id], brief) for p in personas)
         user = f"{brief_prompt(brief)}\n\nThe people ({len(personas)}):\n{cards}"
         context = {"brief": brief, "personas": personas, "archetypes": archetypes}
         try:

@@ -28,6 +28,75 @@ class Settings:
     hands_headless: bool = field(default_factory=lambda: _env("HANDS_HEADLESS", "1") != "0")
     # milliseconds Playwright waits between actions, so people can watch the browsers
     hands_slow_mo: int = field(default_factory=lambda: int(_env("HANDS_SLOW_MO", "0")))
+    # sign-in: on by default; CROWDPOD_AUTH=off turns it off (only sensible on a private machine)
+    auth_required: bool = field(default_factory=lambda: _env("AUTH", "on") != "off")
+    # Google sign-in, from an OAuth client the owner creates in Google Cloud (left empty = off)
+    google_client_id: str = field(default_factory=lambda: _env("GOOGLE_CLIENT_ID"))
+    google_client_secret: str = field(default_factory=lambda: _env("GOOGLE_CLIENT_SECRET"))
+    # where this API and the web app are reached in the browser (for Google's redirect)
+    public_url: str = field(default_factory=lambda: _env("PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/"))
+    app_url: str = field(default_factory=lambda: _env("APP_URL", "http://127.0.0.1:3000").rstrip("/"))
+
+    # local = one person on their own machine; public = a hosted, multi-user site (strict limits)
+    mode: str = field(default_factory=lambda: _env("MODE", "local"))
+    # extra browser origins allowed to call the API with cookies, e.g. https://crowdpod.vercel.app
+    allowed_origins: tuple[str, ...] = field(
+        default_factory=lambda: tuple(o.strip().rstrip("/") for o in _env("ALLOWED_ORIGINS").split(",") if o.strip())
+    )
+    # behind a reverse proxy (Vercel, a load balancer): take the client address from X-Forwarded-For
+    trust_proxy: bool = field(default_factory=lambda: _env("TRUST_PROXY", "0") == "1")
+    # emails allowed to change server-wide settings in public mode
+    admin_emails: tuple[str, ...] = field(
+        default_factory=lambda: tuple(e.strip().lower() for e in _env("ADMIN_EMAILS").split(",") if e.strip())
+    )
+    # where security alerts are emailed (defaults to the admins); SMTP is set with CROWDPOD_SMTP_*
+    alert_emails: tuple[str, ...] = field(
+        default_factory=lambda: tuple(e.strip().lower() for e in _env("ALERT_EMAILS").split(",") if e.strip())
+    )
+
+    @property
+    def public(self) -> bool:
+        return self.mode == "public"
+
+    @property
+    def google_enabled(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret)
+
+    # Limits: generous on your own machine, strict on a public site.
+    @property
+    def max_crowd(self) -> int:
+        return 500 if self.public else 5000
+
+    @property
+    def runs_per_hour(self) -> int:
+        return 10 if self.public else 1000
+
+    @property
+    def concurrent_runs(self) -> int:
+        return 2 if self.public else 20
+
+    @property
+    def hands_runs_per_day(self) -> int:
+        return 5 if self.public else 1000
+
+    @property
+    def max_visitors(self) -> int:
+        return 3 if self.public else 20
+
+    @property
+    def max_body_bytes(self) -> int:
+        return 256 * 1024
+
+    @property
+    def allow_private_urls(self) -> bool:
+        """Browser agents may visit localhost and private networks only on your own machine."""
+        return not self.public
+
+    @property
+    def generated_dir(self) -> Path:
+        """Where personas generated for ideas are saved as Obsidian notes."""
+        override = _env("GENERATED_DIR")
+        return Path(override) if override else self.vault_dir / "personas" / "generated"
 
     @property
     def db_path(self) -> Path:

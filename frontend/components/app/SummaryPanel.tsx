@@ -1,5 +1,5 @@
 "use client";
-import { money, pct, type CrowdSummary } from "@/lib/api";
+import { money, pct, priced, type CrowdSummary } from "@/lib/api";
 
 export default function SummaryPanel({ summary: s }: { summary: CrowdSummary }) {
   const maxCount = Math.max(...s.segments.map((x) => x.count), 1);
@@ -10,7 +10,7 @@ export default function SummaryPanel({ summary: s }: { summary: CrowdSummary }) 
       <div className="stat-row">
         <Stat label="Would adopt" value={pct(s.adoption_rate)} />
         <Stat label="At least interested" value={pct(s.interest_rate)} />
-        <Stat label="The interested would pay (median)" value={`${money(s.median_wtp_interested ?? s.median_wtp)}/mo`} />
+        <Stat label="The interested would pay (median)" value={priced(s.median_wtp_interested ?? s.median_wtp, s.price_unit)} />
         <Stat label="Your price fits their budget" value={pct(s.price_fit_rate)} />
       </div>
 
@@ -21,7 +21,7 @@ export default function SummaryPanel({ summary: s }: { summary: CrowdSummary }) 
               <th scope="col">Segment</th>
               <th scope="col">Verdicts</th>
               <th scope="col">Adopt</th>
-              <th scope="col">Median ₹/mo</th>
+              <th scope="col">{s.price_unit === "one_time" ? "Median ₹ (one-time)" : "Median ₹/mo"}</th>
               <th scope="col">Budget fits</th>
             </tr>
           </thead>

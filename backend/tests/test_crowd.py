@@ -120,3 +120,35 @@ async def test_bad_batch_falls_back_and_is_reported(vault, brief):
     reactions = await CrowdRunner(vault, _BrokenProvider(), batch_size=20).run(brief, crowd, on_reaction, on_degraded)
     assert len(reactions) == 30 and all(r.provider == "mock-fallback" for r in reactions)
     assert sorted(n for n, _ in degraded) == [10, 20] and "skipped" in degraded[0][1]
+
+
+def test_goal_words_keep_short_specific_words():
+    assert goal_words("find the iPhone Duo and its price") == ["iphone", "duo", "price"]
+
+
+def test_brain_prefers_specific_links_and_sees_prices():
+    """'Duo' beats the everywhere-word 'iPhone', and an amount on screen counts as the price."""
+    from crowdpod.llm.mock import decide
+    from crowdpod.models import Observation
+
+    p = CrowdSampler(vault := __import__("crowdpod.vault", fromlist=["Vault"]).Vault(
+        __import__("crowdpod.config", fromlist=["ROOT"]).ROOT / "vault"), seed=1).sample(1, "t", {"student": 1})[0]
+    p = p.model_copy(update={"tech_comfort": 1.0})
+    arch = vault.archetypes["student"]
+    goal = "find the iPhone Duo and its price"
+    links = [{"id": f"e{i}", "role": "link", "label": l} for i, l in enumerate(
+        ["iPhone", "Shop iPhone", "iPhone 18 Pro", "iPhone Accessories", "Learn more, iPhone Duo"])]
+    home = Observation(url="https://x/in/", title="Home", scroll_y=0, scroll_max=2000, text="Welcome", elements=links)
+    d = decide(p, arch, goal, home, [])
+    assert d.action == "click" and d.target == "e4", d
+
+    # the product page shows the name and an amount: done, even though the word "price" isn't there
+    page = Observation(url="https://x/in/iphone-duo/", title="iPhone Duo", scroll_y=0, scroll_max=2000,
+                       text="iPhone Shop iPhone iPhone Duo Hello, hello. From ₹299900.00 or ₹26574.00/mo.",
+                       content="iPhone Duo Hello, hello. From ₹299900.00 or ₹26574.00/mo.", elements=links[:2])
+    assert decide(p, arch, goal, page, [{"action": "click", "target_label": "Learn more, iPhone Duo"}]).action == "done"
+
+    # a page that only says "iPhone" is not success for this goal
+    other = Observation(url="https://x/in/iphone/", title="iPhone", scroll_y=0, scroll_max=0,
+                        text="iPhone 18 Pro. From ₹1,49,900.", elements=[])
+    assert decide(p, arch, goal, other, [{"action": "scroll"}]).action == "give_up"

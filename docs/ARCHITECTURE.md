@@ -94,6 +94,35 @@ Model output is checked against Pydantic schemas. A reply that fails is retried 
 - **Hands for a few.** Browser sessions go to K personas, 5 by default. The user can choose which segments go first. The rest are picked automatically: the strongest segment, the weakest, then by score, preferring undecided people.
 - **Patience in simulated seconds.** Each action costs a person a few seconds, more for people less at ease with tech. That way a slow model doesn't make a persona "impatient".
 
+## 2.5 Research and generated audiences (stage 1)
+
+A fixed set of archetypes can't judge every idea. Taking the upstream engine's approach of deriving personas from source material, each run (with `audience: "generated"`, the default) starts by researching the market (`audience.py`):
+
+1. **Research.** `provider.research()` writes a market brief.
+   - Claude uses Anthropic's server-side web search tool and returns its sources (`grounded: true`).
+   - OpenAI-compatible models answer from their own knowledge (`grounded: false`, shown in the UI).
+   - The founder's own notes (`context_notes`) are added to the prompt.
+2. **Digest.** A structured call turns the brief into a summary, facts, price points and buyer segments (`Research`).
+3. **Design.** A structured call returns 3–10 `GeneratedPersona`s, each with:
+   - its market share;
+   - realistic **purchase** and **monthly** budgets in ₹;
+   - objections and must-haves;
+   - quotes;
+   - the evidence it's based on.
+
+   `to_archetype` clamps every value to sane bounds and drops unknown devices. Each persona is saved as an Obsidian note under `vault/personas/generated/<idea>-<run>/` (git-ignored, since it describes the user's idea).
+4. The run then uses `vault.extended(generated)`. The crowd is weighted by market share, and with `audience: "both"`, half comes from the built-in archetypes.
+
+**Callers can bring their own audience.** A caller can send `provided_audience` and `provided_research`; for example, an MCP client that did its own web search with its own subscription. These skip steps 1–3 and work even with the offline brain.
+
+**Fallback.** If the brain can't research (the offline brain), the run falls back to the built-in archetypes and emits `audience.skipped` with the reason.
+
+**Price basis.** Prices are compared like with like:
+- a one-time price is weighed against the persona's `purchase_budget`;
+- anything recurring is weighed against `budget_month`.
+
+`CrowdSummary.price_unit` says which basis was used, and amounts use Indian digit grouping.
+
 ## 3. System overview
 
 ```

@@ -9,6 +9,7 @@ age: [18, 23]
 profession: engineering student
 city: Bengaluru
 budget_month: [0, 250]
+purchase_budget: [8000, 35000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [15, 45]
 tech_comfort: [0.75, 1.0]
 price_sensitivity: [0.8, 1.0]

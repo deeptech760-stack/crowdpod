@@ -74,6 +74,39 @@ class AnthropicProvider(LLMProvider):
         self._check(message, task)
         return _text(message)
 
+    async def research(self, system: str, user: str) -> tuple[str, list[dict[str, str]], bool]:
+        """Research with Anthropic's server-side web search tool; the search runs on Anthropic's side."""
+        # The dynamic-filtering web search needs Opus/Sonnet; other models use the basic variant.
+        tool = "web_search_20250305" if "haiku" in self.model else "web_search_20260209"
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
+        text: list[str] = []
+        sources: dict[str, str] = {}
+        for _ in range(4):  # a long search turn can pause; continue it a few times at most
+            message = await self.client.beta.messages.create(
+                model=self.model,
+                max_tokens=16000,
+                system=system,
+                messages=messages,
+                tools=[{"type": tool, "name": "web_search", "max_uses": 6}],
+                output_config={"effort": self.effort},
+                betas=[FALLBACK_BETA],
+                fallbacks="default",
+            )
+            self._check(message, "research")
+            for block in message.content:
+                if block.type == "text":
+                    text.append(block.text)
+                elif block.type == "web_search_tool_result" and isinstance(block.content, list):
+                    for result in block.content:  # an error result is an object, not a list
+                        url = getattr(result, "url", "")
+                        if url:
+                            sources.setdefault(url, getattr(result, "title", "") or "")
+            if message.stop_reason != "pause_turn":
+                break
+            messages = [*messages, {"role": "assistant", "content": message.content}]
+        found = [{"url": u, "title": t} for u, t in sources.items()]
+        return "".join(text).strip(), found, bool(found)
+
     async def list_models(self) -> list[str]:
         return sorted([m.id async for m in self.client.models.list()])
 

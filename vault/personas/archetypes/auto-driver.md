@@ -9,6 +9,7 @@ age: [26, 55]
 profession: auto-rickshaw driver
 city: Bengaluru
 budget_month: [0, 150]
+purchase_budget: [5000, 15000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [10, 30]
 tech_comfort: [0.15, 0.5]
 price_sensitivity: [0.85, 1.0]

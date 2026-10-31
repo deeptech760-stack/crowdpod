@@ -39,7 +39,7 @@ def sample_persona(arch: Archetype, run_seed: int, index: int, run_id: str) -> P
     rng = random.Random(seed)
     gender = arch.gender if arch.gender != "any" else rng.choice(["female", "male"])
     budget = _uniform(rng, arch.budget_month)
-    return Persona(
+    persona = Persona(
         id=f"{run_id}-{arch.id}-{index}",
         archetype_id=arch.id,
         seed=seed,
@@ -57,15 +57,21 @@ def sample_persona(arch: Archetype, run_seed: int, index: int, run_id: str) -> P
         price_sensitivity=round(_uniform(rng, arch.price_sensitivity), 2),
         sentiment_bias=round(_uniform(rng, arch.sentiment_bias), 2),
     )
+    # drawn last, so adding it didn't change any persona an older seed produced
+    lo, hi = arch.purchase_budget
+    purchase = _uniform(rng, (lo, hi) if hi > 0 else (arch.budget_month[0] * 12, arch.budget_month[1] * 12))
+    return persona.model_copy(update={"purchase_budget": int(round(purchase / 100) * 100)})
 
 
 class CrowdSampler:
-    def __init__(self, vault: Vault, seed: int):
+    def __init__(self, vault: Vault, seed: int, archetypes: dict[str, Archetype] | None = None):
         self.vault = vault
         self.seed = seed
+        # a run can bring its own archetypes (generated for the idea); default is the vault's
+        self.archetypes = archetypes if archetypes is not None else vault.archetypes
 
     def sample(self, size: int, run_id: str, mix: dict[str, float] | None = None) -> list[Persona]:
-        archetypes = self.vault.archetypes
+        archetypes = self.archetypes
         if mix:
             unknown = set(mix) - set(archetypes)
             if unknown:

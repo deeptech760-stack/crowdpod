@@ -9,6 +9,7 @@ age: [19, 32]
 profession: Bharatanatyam and contemporary dancer who teaches classes
 city: Bengaluru
 budget_month: [100, 700]
+purchase_budget: [10000, 45000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [25, 60]
 tech_comfort: [0.5, 0.85]
 price_sensitivity: [0.5, 0.8]

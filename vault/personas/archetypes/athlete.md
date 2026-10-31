@@ -9,6 +9,7 @@ age: [18, 30]
 profession: state-level 400 m runner
 city: Bengaluru
 budget_month: [100, 500]
+purchase_budget: [10000, 40000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [30, 70]
 tech_comfort: [0.6, 0.9]
 price_sensitivity: [0.5, 0.8]

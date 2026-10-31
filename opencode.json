@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "crowdpod": {
+      "type": "local",
+      "command": ["uv", "--directory", "backend", "run", "crowdpod", "mcp"],
+      "enabled": true
+    }
+  }
+}

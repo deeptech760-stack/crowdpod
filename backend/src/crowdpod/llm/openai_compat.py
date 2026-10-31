@@ -178,6 +178,15 @@ class OpenAICompatProvider(LLMProvider):
         )
         return clean_chat_text(extract_chat_completion_text(response))
 
+    async def research(self, system: str, user: str) -> tuple[str, list[dict[str, str]], bool]:
+        # No live search in the Chat Completions format: the model answers from what it knows.
+        note = (
+            "\n\nYou have no web access. Use what you know, give your best realistic estimates, "
+            "and mark anything that may be out of date."
+        )
+        text = await self.complete_text(system + note, user, task="research", context={})
+        return text, [], False
+
     async def list_models(self) -> list[str]:
         page = await self.client.models.list()
         return sorted(m.id for m in page.data)

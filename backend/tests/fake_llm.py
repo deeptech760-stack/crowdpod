@@ -10,9 +10,41 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
+def _fake_persona(i: int, label: str, share: float, purchase: tuple[int, int]) -> dict[str, Any]:
+    return {
+        "id": label.lower().replace(" ", "-"), "label": label, "share": share,
+        "profession": f"fake profession {i}", "city": "Mumbai", "names": ["Asha", "Ravi", "Meera", "Kabir"],
+        "age": [25, 40], "budget_month": [500, 2000], "purchase_budget": list(purchase),
+        "patience_seconds": [20, 60], "tech_comfort": [0.6, 0.9], "price_sensitivity": [0.3, 0.7],
+        "sentiment_bias": [-0.2, 0.4], "moods": ["curious"], "devices": ["iphone", "flip-phone-9000"],
+        "interests": ["foldables", "photography"], "pains": ["small screens"],
+        "objections": [f"Fake objection {i}"], "must_haves": [f"Fake must-have {i}"],
+        "goals_on_site": ["find the price"], "who_they_are": f"Fake persona {i}.",
+        "how_they_decide": "Compares specs.", "how_they_talk": "Short.",
+        "sample_quotes": [f"Fake persona quote {i}"], "evidence": [f"Fake fact {i}"],
+    }
+
+
+FAKE_AUDIENCE = {"personas": [
+    _fake_persona(0, "Apple upgrader", 0.4, (120000, 200000)),
+    _fake_persona(1, "Foldable owner", 0.3, (100000, 180000)),
+    _fake_persona(2, "Budget switcher", 0.3, (15000, 40000)),
+]}
+
+
 def _answer(system: str, user: str) -> str:
     if '{"ok": true}' in system:
         return '{"ok": true}'
+    if "market researcher" in system:
+        return "Fake research: comparable foldables cost ₹1.5-1.8 lakh in India; buyers are mostly urban professionals."
+    if "Condense this market research" in system:
+        return json.dumps({"summary": "Fake market summary.", "facts": ["Fake fact 0"],
+                           "price_points": ["Fake foldable: ₹1,64,999"], "buyer_segments": ["Fake segment"]})
+    if "design the test audience" in system:
+        return json.dumps(FAKE_AUDIENCE)
+    if "founder described specific people" in system:
+        n = len(re.findall(r"^\d+\. <<<", user, flags=re.MULTILINE))
+        return json.dumps({"personas": [_fake_persona(i, f"Described {i}", 0.2, (1000, 5000)) for i in range(n)]})
     if "panel of separate, real people" in system:
         ids = re.findall(r"^\[([^\]]+)\]", user, flags=re.MULTILINE)
         verdicts = ["adopt", "maybe", "reject"]

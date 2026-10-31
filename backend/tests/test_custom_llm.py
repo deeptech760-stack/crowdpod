@@ -78,7 +78,8 @@ def test_run_driven_by_custom_model(settings, brief, fake_llm, site_url):
         pid = rows[0]["persona"]["id"]
         assert client.post(f"/api/runs/{run_id}/personas/{pid}/interview", json={"question": "Why?"}).json()["answer"] == "Fake answer"
 
-    # 3 crowd batches + 2 docs + 2 hands steps + 1 interview, all authenticated with the user's key
-    assert len(fake_llm.requests) == 8
+    # research + digest + audience + 3 crowd batches + 2 docs + 2 hands steps + 1 interview,
+    # all authenticated with the user's key
+    assert len(fake_llm.requests) == 11
     assert {r["auth"] for r in fake_llm.requests} == {"Bearer test-key-1234"}
     assert all(r["body"]["model"] == "fake-small" for r in fake_llm.requests)

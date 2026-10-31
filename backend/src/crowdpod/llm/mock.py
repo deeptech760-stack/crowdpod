@@ -45,8 +45,8 @@ def react(persona: Persona, arch: Archetype, brief: IdeaBrief) -> Reaction:
     fit = relevance * rng.uniform(0.35, 1.15)
     dealbreaker = next((d for d in arch.dealbreakers if any(mentions(text, w) for w in d.when)), None)
 
-    price = brief.monthly_price
-    budget = persona.budget_month
+    price = brief.basis_price
+    budget = persona.budget_for(brief)
     affordable = 1.0 if price <= 0 else min(budget / price, 2.0) / 2
     over_budget = price > budget
 
@@ -89,7 +89,7 @@ def react(persona: Persona, arch: Archetype, brief: IdeaBrief) -> Reaction:
 
     why = (
         f"Matches {', '.join((interests + pains)[:3])}" if interests or pains else "Nothing here speaks to my life"
-    ) + (f"; ₹{price:g}/month vs my ₹{budget}" if price else "; it's free")
+    ) + (f"; {brief.price_text()} vs my {brief.price_text(budget)}" if price else "; it's free")
     return Reaction(
         persona_id=persona.id,
         verdict=verdict,
@@ -106,14 +106,22 @@ def react(persona: Persona, arch: Archetype, brief: IdeaBrief) -> Reaction:
 _STOP = set(
     "about after again also check could does find from have into just know like look make more much need "
     "only other over should site some than that their them then there these they this using want what when "
-    "where whether which while will with would your yourself whole".split()
+    "where whether which while will with would your yourself whole "
+    "the and for its you can out how who are any has see get our all use try did was not but per via".split()
 )
+# Words that mean "a price"; an amount like ₹2,99,900 on screen counts as finding them.
+_PRICE_WORDS = {"price", "prices", "pricing", "cost", "costs", "fee", "fees", "plans", "rate", "emi"}
+_MONEY = re.compile(r"(₹|rs\.?\s?|inr\s?|\$|€|£)\s?\d", re.IGNORECASE)
 
 
 def goal_words(goal: str) -> list[str]:
-    """Words from a free-text goal that could appear in a link or on the page."""
-    words = re.findall(r"[a-z][a-z'-]{3,}", goal.lower())
+    """Words from a free-text goal that could appear in a link or on the page (3+ letters, so "Duo" counts)."""
+    words = re.findall(r"[a-z0-9][a-z0-9'-]{2,}", goal.lower())
     return list(dict.fromkeys(w for w in words if w not in _STOP))
+
+
+def _seen(text: str, word: str) -> bool:
+    return mentions(text, word) or (word in _PRICE_WORDS and _MONEY.search(text) is not None)
 
 
 def decide(persona: Persona, arch: Archetype, goal: str, obs: Observation, history: list[dict[str, Any]]) -> HandsDecision:
@@ -122,25 +130,37 @@ def decide(persona: Persona, arch: Archetype, goal: str, obs: Observation, histo
     # A goal set for this run says what to look for; otherwise use the archetype's own words.
     custom = goal not in arch.goals_on_site
     keywords = (goal_words(goal) if custom else []) or [k for k in arch.goal_keywords if k]
-    clicked = {h.get("target_label", "").lower() for h in history if h.get("action") == "click"}
+    tried = {h.get("target_label", "").lower() for h in history if h.get("action") == "click"}
     moved = any(h.get("action") in ("click", "scroll") for h in history)
 
-    def hit(label: str) -> str | None:
-        return next((k for k in keywords if mentions(label, k)), None)
+    # 1. Is the goal already on screen? Look at the page content, not menu links. A goal written for
+    #    this run needs every one of its words ("iPhone", "Duo" and a price); an archetype's own
+    #    keywords are alternatives, so any one will do once the person has moved.
+    content = obs.content
+    if not content:  # older observations: strip link text, which can over-strip shared words
+        content = obs.text
+        for el in obs.elements:
+            content = content.replace(el["label"], " ")
+    seen = [k for k in keywords if _seen(content, k)]
+    if (custom and len(seen) == len(keywords)) or (not custom and seen and moved):
+        return HandsDecision(thought=f"There it is: {', '.join(seen)}. That's what I needed.", action="done")
 
-    # 1. A link or button that looks like the goal. People less at ease with tech miss some.
-    for el in obs.elements:
-        kw = hit(el["label"])
-        if kw and el["label"].lower() not in clicked and rng.random() < 0.35 + 0.65 * persona.tech_comfort:
-            return HandsDecision(thought=f'‘{el["label"]}’ — that should have the {kw}.', action="click", target=el["id"])
-
-    # 2. The goal is on screen (in content, not just a menu link) after we did something to get here.
-    content = obs.text
-    for el in obs.elements:
-        content = content.replace(el["label"], " ")
-    found = next((k for k in keywords if mentions(content, k)), None)
-    if found and moved:
-        return HandsDecision(thought=f"Okay, found the {found}. That's what I needed.", action="done")
+    # 2. Follow the most specific link. A word that appears on few links ("Duo") says more than one
+    #    on every link ("iPhone"); words not yet seen on the page count double.
+    labels = [el["label"] for el in obs.elements]
+    weight = {k: (2 if k not in seen else 1) / (1 + sum(mentions(l, k) for l in labels)) for k in keywords}
+    ranked = sorted(
+        ((sum(w for k, w in weight.items() if mentions(el["label"], k)), i, el) for i, el in enumerate(obs.elements)),
+        key=lambda x: (-x[0], x[1]),
+    )
+    for score, _, el in ranked:
+        if score <= 0:
+            break
+        if el["label"].lower() in tried:
+            continue
+        if rng.random() < 0.35 + 0.65 * persona.tech_comfort:  # people less at ease with tech miss some links
+            best = max((k for k in keywords if mentions(el["label"], k)), key=lambda k: weight[k])
+            return HandsDecision(thought=f'‘{el["label"]}’ looks like it leads to the {best}.', action="click", target=el["id"])
 
     # 3. Keep looking.
     if obs.scroll_y < obs.scroll_max:
@@ -165,6 +185,12 @@ class MockProvider(LLMProvider):
         if task == "hands":
             decision = decide(context["persona"], context["archetype"], context["goal"], context["observation"], context["history"])
             return schema.model_validate(decision.model_dump())
+        if task == "describe":
+            from ..describe import persona_from_description
+
+            people = [persona_from_description(d, context["brief"], context["vault"], i)
+                      for i, d in enumerate(context["descriptions"])]
+            return schema.model_validate({"personas": [p.model_dump() for p in people]})
         raise ValueError(f"mock provider has no JSON task {task!r}")
 
     async def complete_text(self, system: str, user: str, *, task: str, context: dict[str, Any]) -> str:

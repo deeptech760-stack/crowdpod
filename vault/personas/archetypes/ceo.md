@@ -9,6 +9,7 @@ age: [38, 60]
 profession: CEO of a 200-person company
 city: Bengaluru
 budget_month: [1000, 10000]
+purchase_budget: [100000, 400000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [10, 25]
 tech_comfort: [0.5, 0.85]
 price_sensitivity: [0.05, 0.3]

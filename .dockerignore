@@ -1,0 +1,12 @@
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+data
+frontend
+backend/tests
+vault/.obsidian
+vault/personas/generated
+.git
+*.sqlite3
+.env

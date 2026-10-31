@@ -9,18 +9,22 @@ import {
   pct,
   providerLabel,
   type CrowdSummary,
+  type GeneratedPersonaCard,
   type HandsSession,
   type HandsStep,
   type PersonaLite,
   type Reaction,
+  type Research,
   type RunInfo,
 } from "@/lib/api";
+import AudiencePanel from "./AudiencePanel";
 import CrowdWall, { type Member } from "./CrowdWall";
 import SummaryPanel from "./SummaryPanel";
 import DocsPanel from "./DocsPanel";
 import HandsPanel from "./HandsPanel";
 
 const STAGES = [
+  ["research", "Research"],
   ["crowd", "Crowd"],
   ["summary", "Signal"],
   ["docs", "Architect"],
@@ -44,6 +48,9 @@ export default function RunView() {
   const [docs, setDocs] = useState<{ brd_md: string; prd_md: string } | null>(null);
   const [sessions, setSessions] = useState<Record<string, LiveSession>>({});
   const [stage, setStage] = useState<Stage>("crowd");
+  const [research, setResearch] = useState<Research | null>(null);
+  const [created, setCreated] = useState<GeneratedPersonaCard[]>([]);
+  const [skipped, setSkipped] = useState<string | null>(null);
   const [status, setStatus] = useState<RunInfo["status"]>("queued");
   const [error, setError] = useState<string | null>(null);
   const [degraded, setDegraded] = useState(0);
@@ -71,12 +78,22 @@ export default function RunView() {
       }
     }, 120);
 
-    const es = new EventSource(api.eventsUrl(id));
+    const es = new EventSource(api.eventsUrl(id), { withCredentials: true });
     const on = <T,>(type: string, fn: (d: T) => void) =>
       es.addEventListener(type, (e) => fn(JSON.parse((e as MessageEvent).data)));
 
     on("run.started", () => setStatus("running"));
-    on<{ size: number }>("crowd.assembled", (d) => setTotal(d.size));
+    on("research.started", () => setStage("research"));
+    on("research.done", (d: Research) => setResearch(d));
+    on<{ personas: GeneratedPersonaCard[] }>("audience.created", (d) => {
+      setCreated(d.personas);
+      setLabels((l) => ({ ...l, ...Object.fromEntries(d.personas.map((p) => [p.id, p.label])) }));
+    });
+    on<{ reason: string }>("audience.skipped", (d) => setSkipped(d.reason));
+    on<{ size: number }>("crowd.assembled", (d) => {
+      setTotal(d.size);
+      setStage("crowd");
+    });
     on("reaction", (d: { persona: PersonaLite; reaction: Reaction }) => buffer.current.push(d));
     on<{ personas: number }>("crowd.degraded", (d) => setDegraded((n) => n + d.personas));
     on("summary", (d: CrowdSummary) => {
@@ -130,6 +147,10 @@ export default function RunView() {
   const brief = info?.request.brief;
   const done = members.length;
   const handsWanted = !!info?.request.hands;
+  const researchWanted = info
+    ? (info.request.audience ?? "builtin") !== "builtin" || (info.request.described?.length ?? 0) > 0
+    : false;
+  const unit = brief?.price_period === "one_time" ? "one_time" : "month";
   const stageIndex = STAGES.findIndex(([s]) => s === stage);
 
   return (
@@ -151,7 +172,7 @@ export default function RunView() {
           {brief?.target_hint && <span>You guessed: {brief.target_hint}</span>}
         </div>
         <ol className="stage-track" aria-label="Progress">
-          {STAGES.filter(([s]) => s !== "hands" || handsWanted).map(([s, label]) => {
+          {STAGES.filter(([s]) => (s !== "hands" || handsWanted) && (s !== "research" || researchWanted)).map(([s, label]) => {
             const i = STAGES.findIndex(([x]) => x === s);
             const state = i < stageIndex || stage === "done" ? "done" : i === stageIndex ? "now" : "";
             return (
@@ -181,7 +202,10 @@ export default function RunView() {
         )}
       </section>
 
-      <CrowdWall runId={id} members={members} total={total} product={brief?.name ?? "it"} labels={labels} />
+      {researchWanted && (
+        <AudiencePanel research={research} personas={created} skipped={skipped} working={stage === "research"} unit={unit} />
+      )}
+      <CrowdWall runId={id} members={members} total={total} product={brief?.name ?? "it"} labels={labels} unit={unit} />
       {summary && <SummaryPanel summary={summary} />}
       {docs && <DocsPanel docs={docs} name={brief?.name ?? "idea"} />}
       {handsWanted && (

@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState, type FormEvent } from "react";
 import { Loader2, MessageCircle, Send } from "lucide-react";
-import { api, money, type PersonaLite, type Reaction, type Verdict } from "@/lib/api";
+import { api, priced, type PersonaLite, type Reaction, type Verdict } from "@/lib/api";
 
 export type Member = { persona: PersonaLite; reaction: Reaction };
 
@@ -18,12 +18,14 @@ export default function CrowdWall({
   total,
   product,
   labels,
+  unit,
 }: {
   runId: string;
   members: Member[];
   total: number;
   product: string;
   labels: Record<string, string>;
+  unit: "one_time" | "month";
 }) {
   const label = (id: string) => labels[id] ?? id.replace(/-/g, " ");
   const [filter, setFilter] = useState<Verdict | "all">("all");
@@ -78,7 +80,7 @@ export default function CrowdWall({
         </div>
         <div className="crowd-side">
           {focus ? (
-            <PersonaCard key={focus.persona.id} runId={runId} m={focus} product={product} segment={label(focus.persona.archetype_id)} />
+            <PersonaCard key={focus.persona.id} runId={runId} m={focus} product={product} segment={label(focus.persona.archetype_id)} unit={unit} />
           ) : (
             <p className="app-empty">Waiting for the first reaction…</p>
           )}
@@ -97,7 +99,19 @@ export default function CrowdWall({
   );
 }
 
-function PersonaCard({ runId, m, product, segment }: { runId: string; m: Member; product: string; segment: string }) {
+function PersonaCard({
+  runId,
+  m,
+  product,
+  segment,
+  unit,
+}: {
+  runId: string;
+  m: Member;
+  product: string;
+  segment: string;
+  unit: "one_time" | "month";
+}) {
   const [q, setQ] = useState("");
   const [chat, setChat] = useState<[string, string][]>([]);
   const [busy, setBusy] = useState(false);
@@ -130,7 +144,7 @@ function PersonaCard({ runId, m, product, segment }: { runId: string; m: Member;
       <blockquote>“{r.quote}”</blockquote>
       <dl>
         <dt>Would pay</dt>
-        <dd>{money(r.willingness_to_pay)}/month</dd>
+        <dd>{priced(r.willingness_to_pay, unit)}</dd>
         {r.top_objection && (
           <>
             <dt>Biggest objection</dt>

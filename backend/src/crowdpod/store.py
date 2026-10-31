@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .models import CrowdSummary, Documents, HandsSession, Persona, Reaction, RunEvent, RunRequest
+from .models import Archetype, CrowdSummary, Documents, HandsSession, Persona, Reaction, RunEvent, RunRequest
 
 SCHEMA = """
 create table if not exists runs (
@@ -20,6 +20,7 @@ create table if not exists personas (run_id text, id text, archetype_id text, da
 create table if not exists reactions (run_id text, persona_id text, verdict text, data text, primary key (run_id, persona_id));
 create table if not exists sessions (run_id text, persona_id text, data text, primary key (run_id, persona_id));
 create table if not exists events (run_id text, seq integer, type text, data text, primary key (run_id, seq));
+create table if not exists run_extras (run_id text, kind text, data text, primary key (run_id, kind));
 """
 
 
@@ -32,6 +33,12 @@ class Store:
         with self._lock:
             self._db.executescript(SCHEMA)
             self._db.execute("pragma journal_mode=wal")
+            # older databases: runs gained an owner when sign-in arrived
+            columns = {r[1] for r in self._db.execute("pragma table_info(runs)")}
+            if "owner" not in columns:
+                self._db.execute("alter table runs add column owner text")
+            self._db.execute("create index if not exists runs_owner on runs (owner, created_at)")
+            self._db.commit()
 
     def _exec(self, sql: str, args: tuple[Any, ...] = ()) -> None:
         with self._lock:
@@ -48,10 +55,25 @@ class Store:
             return self._db.execute(sql, args).fetchall()
 
     # runs
-    def create_run(self, run_id: str, request: RunRequest, provider: str) -> None:
+    def create_run(self, run_id: str, request: RunRequest, provider: str, owner: str | None = None) -> None:
         self._exec(
-            "insert into runs (id, created_at, status, provider, request) values (?, ?, 'queued', ?, ?)",
-            (run_id, time.time(), provider, request.model_dump_json()),
+            "insert into runs (id, created_at, status, provider, request, owner) values (?, ?, 'queued', ?, ?, ?)",
+            (run_id, time.time(), provider, request.model_dump_json(), owner),
+        )
+
+    def run_owner(self, run_id: str) -> tuple[bool, str | None]:
+        """(exists, owner id)."""
+        rows = self._all("select owner from runs where id = ?", (run_id,))
+        return (True, rows[0]["owner"]) if rows else (False, None)
+
+    def count_runs(self, owner: str | None, since: float, *, statuses: tuple[str, ...] | None = None,
+                   with_hands: bool = False) -> int:
+        sql = "select request, status from runs where created_at >= ? and owner is ?"
+        rows = self._all(sql, (since, owner))
+        return sum(
+            1 for r in rows
+            if (statuses is None or r["status"] in statuses)
+            and (not with_hands or json.loads(r["request"]).get("hands"))
         )
 
     def set_status(self, run_id: str, status: str, error: str | None = None) -> None:
@@ -75,8 +97,17 @@ class Store:
             "has_docs": r["docs"] is not None,
         }
 
-    def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
-        rows = self._all("select id, created_at, status, provider, request from runs order by created_at desc limit ?", (limit,))
+    def list_runs(self, limit: int = 50, owner: str | None = None, everyone: bool = False,
+                  unowned: bool = False) -> list[dict[str, Any]]:
+        """Runs of `owner`; `unowned` adds runs made before runs had owners."""
+        if everyone:
+            rows = self._all("select id, created_at, status, provider, request from runs order by created_at desc limit ?", (limit,))
+        else:
+            rows = self._all(
+                "select id, created_at, status, provider, request from runs where owner is ? or (? and owner is null) "
+                "order by created_at desc limit ?",
+                (owner, int(unowned), limit),
+            )
         return [
             {"id": r["id"], "created_at": r["created_at"], "status": r["status"], "provider": r["provider"],
              "name": json.loads(r["request"])["brief"]["name"]}
@@ -116,6 +147,17 @@ class Store:
         sql += " order by p.id limit ? offset ?"
         args += [limit, offset]
         return [{"persona": json.loads(r["persona"]), "reaction": json.loads(r["reaction"])} for r in self._all(sql, tuple(args))]
+
+    # research and generated audience
+    def save_extra(self, run_id: str, kind: str, data: Any) -> None:
+        self._exec("insert or replace into run_extras values (?, ?, ?)", (run_id, kind, json.dumps(data, ensure_ascii=False)))
+
+    def get_extra(self, run_id: str, kind: str) -> Any:
+        rows = self._all("select data from run_extras where run_id = ? and kind = ?", (run_id, kind))
+        return json.loads(rows[0]["data"]) if rows else None
+
+    def get_archetypes(self, run_id: str) -> dict[str, Archetype]:
+        return {a["id"]: Archetype.model_validate(a) for a in self.get_extra(run_id, "archetypes") or []}
 
     # hands
     def save_session(self, run_id: str, s: HandsSession) -> None:

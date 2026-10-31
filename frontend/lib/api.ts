@@ -1,7 +1,16 @@
 // Client for the Crowdpod backend (backend/src/crowdpod/api.py).
 
+// On your own computer the API is on port 8000 of the same host name (localhost or 127.0.0.1), so the
+// sign-in cookie counts as same-site. On a hosted site /api/* is proxied by the host (vercel.json),
+// so the API is the page's own origin and the cookie never crosses sites.
+const LOCAL = /^(localhost|127\.0\.0\.1)$/;
 export const API_URL = (
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000"
+  process.env.NEXT_PUBLIC_API_URL ??
+  (typeof window === "undefined"
+    ? "http://127.0.0.1:8000"
+    : LOCAL.test(window.location.hostname)
+      ? `${window.location.protocol}//${window.location.hostname}:8000`
+      : "")
 ).replace(/\/$/, "");
 
 export type Verdict = "adopt" | "maybe" | "reject";
@@ -24,6 +33,10 @@ export interface RunRequest {
   crowd_size: number;
   mix?: Record<string, number> | null;
   seed?: number;
+  audience?: "generated" | "builtin" | "both";
+  audience_size?: number;
+  context_notes?: string;
+  described?: string[]; // people the user describes; each becomes a full persona
   hands?: {
     url: string;
     personas: number;
@@ -83,7 +96,8 @@ export interface SegmentStats {
 
 export interface CrowdSummary {
   size: number;
-  monthly_price: number;
+  monthly_price: number; // the price compared with budgets, in price_unit terms
+  price_unit?: "one_time" | "month";
   adoption_rate: number;
   interest_rate: number;
   median_wtp: number;
@@ -133,6 +147,30 @@ export interface RunInfo {
   has_docs: boolean;
 }
 
+export interface Research {
+  summary: string;
+  facts: string[];
+  price_points: string[];
+  buyer_segments: string[];
+  sources: { title: string; url: string }[];
+  grounded: boolean;
+}
+
+export interface GeneratedPersonaCard {
+  id: string;
+  label: string;
+  share: number;
+  profession: string;
+  city: string;
+  age: [number, number];
+  budget_month: [number, number];
+  purchase_budget: [number, number];
+  objections: string[];
+  must_haves: string[];
+  evidence: string[];
+  note: string;
+}
+
 export interface RunListItem {
   id: string;
   created_at: number;
@@ -144,8 +182,13 @@ export interface RunListItem {
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
+    credentials: "include", // send the sign-in cookie
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
+  if (res.status === 401 && !path.startsWith("/api/auth/") && typeof window !== "undefined") {
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- auth boundary: a full page load, so no state from the signed-out session survives
+    window.location.assign(`/login/?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+  }
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -164,7 +207,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => call<{ ok: boolean; provider: string; archetypes: number }>("/api/health"),
+  health: () => call<{ ok: boolean; provider?: string; archetypes?: number }>("/api/health"),
   archetypes: () => call<Archetype[]>("/api/archetypes"),
   runs: () => call<RunListItem[]>("/api/runs"),
   run: (id: string) => call<RunInfo>(`/api/runs/${id}`),
@@ -176,6 +219,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question }),
     }),
+  authConfig: () => call<{ required: boolean; google: boolean }>("/api/auth/config"),
+  me: () => call<{ user: AuthUser | null; required: boolean; mode: "local" | "public" }>("/api/auth/me"),
+  login: (email: string, password: string) =>
+    call<{ user: AuthUser }>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  register: (name: string, email: string, password: string) =>
+    call<{ user: AuthUser }>("/api/auth/register", { method: "POST", body: JSON.stringify({ name, email, password }) }),
+  logout: () => call<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  googleStartUrl: () => `${API_URL}/api/auth/google/start`,
   eventsUrl: (id: string) => `${API_URL}/api/runs/${id}/events`,
   artifactUrl: (id: string, path: string) => `${API_URL}/api/runs/${id}/artifacts/${path}`,
   settings: () => call<PublicSettings>("/api/settings"),
@@ -188,9 +239,79 @@ export const api = {
     }),
   listModels: (brain: BrainForm) =>
     call<{ models: string[] }>("/api/settings/models", { method: "POST", body: JSON.stringify(brain) }),
-  mcpSetup: () =>
-    call<{ backend_dir: string; claude_code: string; codex: string; claude_desktop: string }>("/api/settings/mcp"),
+  mcpSetup: () => call<McpSetup>("/api/settings/mcp"),
+  tokens: () => call<AccessToken[]>("/api/tokens"),
+  createToken: (name: string) =>
+    call<AccessToken & { token: string }>("/api/tokens", { method: "POST", body: JSON.stringify({ name }) }),
+  revokeToken: (id: string) => call<{ ok: boolean }>(`/api/tokens/${id}`, { method: "DELETE" }),
+  adminOverview: () => call<AdminOverview>("/api/admin/overview"),
+  adminEvents: (opts: { user_id?: string; only?: "alerts" } = {}) =>
+    call<AuditEvent[]>(`/api/admin/events?${new URLSearchParams(opts as Record<string, string>)}`),
+  block: (userId: string, reason: string) =>
+    call<{ ok: boolean }>(`/api/admin/users/${userId}/block`, { method: "POST", body: JSON.stringify({ reason }) }),
+  unblock: (userId: string) => call<{ ok: boolean }>(`/api/admin/users/${userId}/unblock`, { method: "POST" }),
+  testAlert: () => call<{ sent: boolean; to: string[]; detail: string }>("/api/admin/alerts/test", { method: "POST" }),
 };
+
+export interface McpSetup {
+  api_url: string;
+  needs_token: boolean;
+  browsers: string;
+  claude_code: string;
+  codex: string;
+  claude_desktop: string;
+  opencode: string;
+}
+
+export interface AccessToken {
+  id: string;
+  name: string;
+  created_at: number;
+  last_used: number | null;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  google: boolean;
+  created_at: number;
+  last_login: number | null;
+  last_ip: string | null;
+  runs: number;
+  warnings: number;
+  blocked: boolean;
+  blocked_reason: string | null;
+  admin: boolean;
+  you: boolean;
+}
+
+export interface AuditEvent {
+  id: number;
+  at: number;
+  user_id: string | null;
+  email: string;
+  ip: string;
+  kind: string;
+  label: string;
+  severity: "info" | "warning" | "high";
+  detail: string;
+}
+
+export interface AdminOverview {
+  stats: { users: number; signed_in_24h: number; runs_24h: number; warnings_24h: number; blocked: number };
+  users: AdminUser[];
+  email_alerts: boolean;
+  alert_to: string[];
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  google: boolean;
+  admin?: boolean;
+}
 
 export type BrainProvider = "mock" | "anthropic" | "openai";
 
@@ -221,4 +342,7 @@ export const providerLabel = (p: string) =>
   p === "mock" ? "Offline simulation (rule-based)" : `Brain: ${p}`;
 
 export const money = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
+/** A price or budget in the terms of the run: "₹1,89,900 one-time" or "₹299/mo". */
+export const priced = (n: number, unit?: "one_time" | "month") =>
+  unit === "one_time" ? `${money(n)} one-time` : `${money(n)}/mo`;
 export const pct = (n: number) => `${Math.round(n * 100)}%`;

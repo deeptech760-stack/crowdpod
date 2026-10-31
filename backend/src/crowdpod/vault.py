@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from functools import cached_property
 from pathlib import Path
@@ -59,6 +60,12 @@ class Vault:
         if not found:
             raise ValueError(f"no archetype notes in {self.root}")
         return found
+
+    def extended(self, extra: dict[str, Archetype]) -> "Vault":
+        """A view of this vault that also knows a run's generated archetypes."""
+        view = copy.copy(self)
+        view.__dict__["archetypes"] = {**self.archetypes, **extra}
+        return view
 
     def template(self, name: str) -> str:
         _, body = split_note((self.root / "templates" / f"{name}.md").read_text(encoding="utf-8"))

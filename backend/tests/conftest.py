@@ -26,8 +26,11 @@ def brief() -> IdeaBrief:
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings(vault_dir=ROOT / "vault", data_dir=tmp_path, llm_provider="mock")
+def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    # generated personas go to a temp folder, never into the real vault
+    monkeypatch.setenv("CROWDPOD_GENERATED_DIR", str(tmp_path / "generated"))
+    # sign-in has its own tests (test_auth.py); the others test features with it off
+    return Settings(vault_dir=ROOT / "vault", data_dir=tmp_path, llm_provider="mock", auth_required=False)
 
 
 @pytest.fixture(scope="session")

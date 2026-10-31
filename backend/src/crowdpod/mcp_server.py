@@ -6,6 +6,9 @@ Two groups of tools:
   brief and each page, then chooses every click itself. Crowdpod only drives Chromium and records.
 
 Runs over stdio, so only the local client that started it can talk to it.
+
+Connecting to a hosted Crowdpod: set CROWDPOD_API_URL to the site's API and CROWDPOD_TOKEN to a
+personal token from its Settings page. Without a token it uses this machine's local token.
 """
 
 from __future__ import annotations
@@ -21,15 +24,20 @@ from typing import Any
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.mcpserver.utilities.types import Image
 
+from .auth import mcp_token
 from .config import get_settings
 from .hands.driver import PlaywrightBrowser, PlaywrightDriver
-from .models import HandsDecision, HandsStep, _web_url
+from .models import GeneratedPersona, HandsDecision, HandsStep, Persona, _web_url
 from .sampler import sample_persona
 from .vault import Vault
 
 API = os.environ.get("CROWDPOD_API_URL", "http://127.0.0.1:8000").rstrip("/")
+TOKEN = os.environ.get("CROWDPOD_TOKEN", "").strip()
+# where people open runs in the browser: the hosted site itself, or the local web app
+APP = os.environ.get("CROWDPOD_APP_URL", API if TOKEN else "http://localhost:3000").rstrip("/")
 MAX_VISITS = 3  # browsers open at once
 MAX_STEPS = 40
 
@@ -45,13 +53,21 @@ server = MCPServer(
 
 
 async def _api(method: str, path: str, **kwargs: Any) -> Any:
-    async with httpx.AsyncClient(base_url=API, timeout=60) as client:
+    # the API requires sign-in: a personal token for a hosted site, or this machine's local token
+    headers = {"Authorization": f"Bearer {TOKEN or mcp_token(get_settings().data_dir)}"}
+    async with httpx.AsyncClient(base_url=API, timeout=60, headers=headers) as client:
         try:
             r = await client.request(method, path, **kwargs)
         except httpx.ConnectError:
-            raise RuntimeError(f"Crowdpod isn't running at {API}. Start it with `uv run crowdpod serve` in backend/.")
+            raise ToolError(f"Crowdpod isn't running at {API}. Start it with `uv run crowdpod serve` in backend/.")
+        if r.status_code == 401:
+            raise ToolError("Crowdpod refused the token. Create a new one in Settings and set CROWDPOD_TOKEN.")
         if r.status_code >= 400:
-            raise RuntimeError(f"Crowdpod API {r.status_code}: {r.text[:300]}")
+            try:
+                detail = r.json().get("detail", r.text)
+            except ValueError:
+                detail = r.text
+            raise ToolError(f"Crowdpod refused this ({r.status_code}): {str(detail)[:300]}")
         return r.json()
 
 
@@ -80,19 +96,44 @@ async def start_simulation(
     website_url: str = "",
     visitors: int = 3,
     visitor_goal: str = "",
+    audience: str = "generated",
+    personas: list[GeneratedPersona] | None = None,
+    research_summary: str = "",
+    research_facts: list[str] | None = None,
+    research_sources: list[str] | None = None,
+    describe_people: list[str] | None = None,
 ) -> str:
     """Start a crowd simulation of a product idea. price_period is month, year, one_time or free.
     Give website_url to also send `visitors` personas to use the site with `visitor_goal`.
-    Returns the run id; results take a few seconds to minutes depending on the model."""
+
+    Best results: first research the idea's market yourself with web search (competitors, real prices
+    in India, who buys, why people hesitate), then pass 4-8 `personas` designed from that research,
+    with realistic purchase_budget / budget_month in ₹, plus research_summary, research_facts and
+    research_sources (URLs). Crowdpod saves them to the vault and runs the crowd with them.
+    Without personas, `audience` decides: generated (Crowdpod's own brain researches, if it can),
+    builtin, or both. `describe_people`: up to 5 one-sentence descriptions of specific people to include
+    ("a broke engineering student in Pune who only uses free apps"); each becomes a full persona with
+    budgets, patience, moods and dealbreakers, and its own segment of the crowd. Returns the run id."""
     req: dict[str, Any] = {
         "brief": {"name": name, "pitch": idea, "price": price, "price_period": price_period,
                   "target_hint": target_guess, "currency": "INR"},
         "crowd_size": max(1, min(crowd_size, 2000)),
+        "audience": audience if audience in ("generated", "builtin", "both") else "generated",
     }
+    if describe_people:
+        req["described"] = [d[:400] for d in describe_people[:5]]
+    if personas:
+        req["provided_audience"] = {"personas": [p.model_dump() for p in personas[:10]]}
+        req["provided_research"] = {
+            "summary": research_summary or "Research done by the MCP client.",
+            "facts": research_facts or [],
+            "sources": [{"url": u} for u in (research_sources or []) if u.startswith(("http://", "https://"))],
+            "grounded": bool(research_sources),
+        }
     if website_url:
         req["hands"] = {"url": _web_url(website_url), "personas": max(1, min(visitors, 10)), "goal": visitor_goal or None}
     run_id = (await _api("POST", "/api/runs", json=req))["run_id"]
-    return f"Started run {run_id}. Watch it at http://localhost:3000/app/run/?id={run_id} or call get_results('{run_id}')."
+    return f"Started run {run_id}. Watch it at {APP}/app/run/?id={run_id} or call get_results('{run_id}')."
 
 
 @server.tool()
@@ -100,9 +141,12 @@ async def get_results(run_id: str) -> str:
     """Status and the crowd's verdict for a run: headline, segments, objections and requests."""
     run = await _api("GET", f"/api/runs/{run_id}")
     s = run.get("summary")
+    if run["status"] == "failed":
+        return f"Run {run_id} FAILED (final, stop polling): {run.get('error') or 'unknown error'}"
     if not s:
-        return f"Run {run_id} is {run['status']}" + (f": {run['error']}" if run.get("error") else ". Try again shortly.")
-    lines = [f"Run {run_id} ({run['status']}, brain: {run['provider']})", s["headline"],
+        return f"Run {run_id} is still {run['status']}. Call get_results again in about 15 seconds."
+    final = "FINISHED (final)" if run["status"] == "finished" else f"{run['status']} (partial results)"
+    lines = [f"Run {run_id} {final}, brain: {run['provider']}", s["headline"],
              f"Adopt {s['adoption_rate']:.0%}, interested {s['interest_rate']:.0%}, price fits {s['price_fit_rate']:.0%} of budgets.",
              "Segments:"]
     lines += [f"- {g['label']}: {g['count']} people, adopt {g['adoption_rate']:.0%}, median ₹{g['median_wtp']:g}/month"
@@ -178,13 +222,21 @@ async def visit_as_persona(url: str, goal: str, persona: str = "student") -> lis
     """Open a real browser as one persona (an archetype id from list_personas) and return their
     character brief, the page as text and a screenshot. You then decide each step as that person
     with browser_step, and finish with end_visit."""
-    url = _web_url(url)  # check before launching anything
+    try:
+        url = _web_url(url)  # check before launching anything
+    except ValueError as e:
+        raise ToolError(str(e)) from e
     if len(_visits) >= MAX_VISITS:
-        raise RuntimeError(f"At most {MAX_VISITS} visits at once; end one first.")
-    vault = _get_vault()
-    if persona not in vault.archetypes:
-        raise ValueError(f"Unknown persona {persona!r}. Choose one of: {', '.join(vault.archetypes)}")
-    p = sample_persona(vault.archetypes[persona], random.randrange(1 << 30), 0, "mcp")
+        raise ToolError(f"At most {MAX_VISITS} visits at once; end one first.")
+    if TOKEN:  # hosted site: it samples the persona and writes the brief; the browser runs here
+        got = await _api("POST", "/api/personas/sample", json={"archetype": persona})
+        p, character = Persona.model_validate(got["persona"]), got["brief"]
+    else:
+        vault = _get_vault()
+        if persona not in vault.archetypes:
+            raise ToolError(f"Unknown persona {persona!r}. Choose one of: {', '.join(vault.archetypes)}")
+        p = sample_persona(vault.archetypes[persona], random.randrange(1 << 30), 0, "mcp")
+        character = vault.persona_system_prompt(p)
     browser = await PlaywrightBrowser(headless=os.environ.get("CROWDPOD_HANDS_HEADLESS", "1") != "0").__aenter__()
     try:
         driver = await browser.driver(p.device)
@@ -196,7 +248,7 @@ async def visit_as_persona(url: str, goal: str, persona: str = "student") -> lis
     _visits[v.id] = v
     brief = (
         f"Visit {v.id}. You are now playing this person. Decide every step as they would.\n\n"
-        f"{vault.persona_system_prompt(p)}\n\n"
+        f"{character}\n\n"
         f"Device: {p.device}. Patience: about {p.patience_seconds} seconds. Give up when they would."
     )
     return [brief, *await _look(v)]
@@ -208,12 +260,12 @@ async def browser_step(visit_id: str, action: str, target: str = "", text: str =
     scroll (text = down or up) or back. thought is what the persona thinks, in their own words."""
     v = _visits.get(visit_id)
     if not v:
-        raise ValueError(f"No open visit {visit_id!r}.")
+        raise ToolError(f"No open visit {visit_id!r}.")
     if len(v.steps) >= MAX_STEPS:
-        raise RuntimeError("Step limit reached; call end_visit.")
+        raise ToolError("Step limit reached; call end_visit.")
     decision = HandsDecision(action=action, target=target, text=text[:200], thought=thought[:300])
     if decision.action in ("done", "give_up"):
-        raise ValueError("Use end_visit to finish.")
+        raise ToolError("Use end_visit to finish.")
     error = ""
     if decision.action in ("click", "type") and decision.target not in v.labels:
         error = f"no element {decision.target!r} on screen"
@@ -234,7 +286,7 @@ async def end_visit(visit_id: str, outcome: str, summary: str) -> str:
     in the persona's words. The visit log is saved under data/mcp-visits/."""
     v = _visits.pop(visit_id, None)
     if not v:
-        raise ValueError(f"No open visit {visit_id!r}.")
+        raise ToolError(f"No open visit {visit_id!r}.")
     try:
         await v.driver.close()
     finally:

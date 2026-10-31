@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Check, Copy, Cpu, KeyRound, Loader2, MonitorPlay, Plug, PlugZap, Sparkles, X } from "lucide-react";
+import { Check, Copy, Cpu, KeyRound, Loader2, MonitorPlay, Plug, PlugZap, Sparkles, Trash2, X } from "lucide-react";
 import { Eyebrow } from "../landing/UI";
 import {
   api,
+  type AccessToken,
   type BrainForm,
   type BrainProvider,
   type BrowserSettings,
+  type McpSetup,
   type PublicSettings,
 } from "@/lib/api";
 
@@ -50,6 +52,38 @@ const BRAINS: { id: BrainProvider; title: string; body: string; icon: typeof Cpu
 type Saved = PublicSettings["brain"];
 
 export default function SettingsPage() {
+  const [who, setWho] = useState<{ manage: boolean; signedIn: boolean } | null>(null);
+  const [token, setToken] = useState(""); // a token created just now, shown once and filled into the setup
+  useEffect(() => {
+    api
+      .me()
+      .then((m) => setWho({ manage: m.mode !== "public" || !!m.user?.admin, signedIn: !!m.user }))
+      .catch(() => setWho({ manage: true, signedIn: false }));
+  }, []);
+  if (!who) return <p className="app-empty">Loading settings…</p>;
+  return (
+    <div className="settings">
+      {who.manage ? (
+        <BrainSettings />
+      ) : (
+        <section className="app-card">
+          <Eyebrow>SETTINGS</Eyebrow>
+          <h1>
+            Connect <em>your own agent.</em>
+          </h1>
+          <p className="app-lede">
+            The model that plays the crowd on this site is chosen by its owner. Create an access token below to run
+            Crowdpod from Claude Code, Codex, Claude Desktop or OpenCode on your computer.
+          </p>
+        </section>
+      )}
+      {who.signedIn && <TokensSection onCreated={setToken} />}
+      <McpSection token={token} />
+    </div>
+  );
+}
+
+function BrainSettings() {
   const [saved, setSaved] = useState<Saved | null>(null);
   const [form, setForm] = useState<Omit<BrainForm, "api_key">>({
     provider: "mock", base_url: "", model: "", concurrency: 4, batch_size: 20, effort: "medium",
@@ -123,7 +157,7 @@ export default function SettingsPage() {
   const needsKey = form.provider === "anthropic";
 
   return (
-    <div className="settings">
+    <>
       <section className="app-card">
         <Eyebrow>SETTINGS</Eyebrow>
         <h1>
@@ -212,7 +246,7 @@ export default function SettingsPage() {
                 </button>
               )}
               <small>
-                Stored only on the computer running Crowdpod (in <code>data/settings.json</code>), never sent back to
+                Stored only on the server running Crowdpod (in <code>data/settings.json</code>), never sent back to
                 this page, and only used for the service it was entered for.
               </small>
             </label>
@@ -260,7 +294,12 @@ export default function SettingsPage() {
               ) : (
                 <div className="field field-action">
                   <span>&nbsp;</span>
-                  <button type="button" className="chip" onClick={() => run("models")} disabled={!!busy || !form.base_url}>
+                  <button
+                    type="button"
+                    className="chip"
+                    onClick={() => run("models")}
+                    disabled={!!busy || (form.provider === "openai" && !form.base_url)}
+                  >
                     {busy === "models" && <Loader2 className="spin" size={14} />} Load models from this address
                   </button>
                 </div>
@@ -352,9 +391,106 @@ export default function SettingsPage() {
           </p>
         )}
       </div>
+    </>
+  );
+}
 
-      <McpSection />
-    </div>
+function TokensSection({ onCreated }: { onCreated: (token: string) => void }) {
+  const [tokens, setTokens] = useState<AccessToken[]>([]);
+  const [name, setName] = useState("my agent");
+  const [fresh, setFresh] = useState("");
+  const [error, setError] = useState("");
+  const load = () => api.tokens().then(setTokens).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  useEffect(() => {
+    load();
+  }, []);
+  const create = async () => {
+    setError("");
+    try {
+      const t = await api.createToken(name);
+      setFresh(t.token);
+      onCreated(t.token);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const revoke = async (id: string) => {
+    await api.revokeToken(id).catch(() => {});
+    load();
+  };
+  const when = (s: number | null) => (s ? new Date(s * 1000).toLocaleString() : "never");
+  return (
+    <section className="app-card">
+      <span className="mini-label">
+        <KeyRound size={13} /> ACCESS TOKENS
+      </span>
+      <h2>
+        Keys for <em>your agents.</em>
+      </h2>
+      <p className="app-lede">
+        A token lets an agent on your computer use Crowdpod as you: run simulations and read your results. It can&apos;t
+        change your account or create more tokens. Revoke it here if it leaks.
+      </p>
+      <div className="field-row">
+        <label className="field">
+          <span>Name</span>
+          <input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <div className="field field-action">
+          <span>&nbsp;</span>
+          <button className="chip" onClick={create}>
+            <KeyRound size={14} /> Create token
+          </button>
+        </div>
+      </div>
+      {fresh && (
+        <>
+          <div className="code-box">
+            <pre>{fresh}</pre>
+            <CopyButton text={fresh} />
+          </div>
+          <p className="mcp-hint">Copy it now: it won&apos;t be shown again. The setup below already includes it.</p>
+        </>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {tokens.length > 0 && (
+        <ul className="token-list">
+          {tokens.map((t) => (
+            <li key={t.id}>
+              <span>
+                <b>{t.name}</b> <small>created {when(t.created_at)} · last used {when(t.last_used)}</small>
+              </span>
+              <button className="text-link small-link" onClick={() => revoke(t.id)}>
+                <Trash2 size={13} /> Revoke
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="copy"
+      aria-label="Copy"
+      onClick={() => {
+        navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      {copied ? <Check size={15} /> : <Copy size={15} />}
+    </button>
   );
 }
 
@@ -362,16 +498,18 @@ const CLIENTS = [
   ["claude_code", "Claude Code", "Run this once in a terminal:"],
   ["codex", "Codex", "Add this to ~/.codex/config.toml:"],
   ["claude_desktop", "Claude Desktop", "Add this to claude_desktop_config.json (Settings → Developer → Edit config):"],
+  ["opencode", "OpenCode", "Add this to opencode.json in your project (or merge it into ~/.config/opencode/opencode.json):"],
 ] as const;
 
-function McpSection() {
-  const [setup, setSetup] = useState<Record<string, string> | null>(null);
+function McpSection({ token }: { token: string }) {
+  const [setup, setSetup] = useState<McpSetup | null>(null);
   const [tab, setTab] = useState<(typeof CLIENTS)[number][0]>("claude_code");
-  const [copied, setCopied] = useState(false);
   useEffect(() => {
     api.mcpSetup().then(setSetup).catch(() => setSetup(null));
   }, []);
   const current = CLIENTS.find(([id]) => id === tab)!;
+  // the token stays in this page: the server only ever sends the PASTE_YOUR_TOKEN placeholder
+  const text = setup ? (token ? setup[tab].replaceAll("PASTE_YOUR_TOKEN", token) : setup[tab]) : "";
   return (
     <section className="app-card mcp-section">
       <span className="mini-label">
@@ -381,8 +519,8 @@ function McpSection() {
         Use Crowdpod from <em>your own AI tools.</em>
       </h2>
       <p className="app-lede">
-        Connect Crowdpod to Claude Code, Codex or Claude Desktop. Your tool keeps its own sign-in and subscription;
-        Crowdpod never sees it. Your agent can then run crowd simulations, read the BRD and PRD, interview personas,
+        Connect Crowdpod to Claude Code, Codex, Claude Desktop or OpenCode. Your tool keeps its own sign-in and
+        subscription; Crowdpod never sees it. Your agent can then run crowd simulations, read the BRD and PRD, interview personas,
         and even play a persona itself in a real browser, step by step.
       </p>
       <div className="chip-row" role="tablist" aria-label="AI tool">
@@ -394,24 +532,36 @@ function McpSection() {
       </div>
       <p className="mcp-hint">{current[2]}</p>
       <div className="code-box">
-        <pre>{setup ? setup[tab] : "Start the Crowdpod server to see the command for this computer."}</pre>
-        {setup && (
-          <button
-            className="copy"
-            aria-label="Copy"
-            onClick={() => {
-              navigator.clipboard.writeText(setup[tab]).then(() => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              });
-            }}
-          >
-            {copied ? <Check size={15} /> : <Copy size={15} />}
-          </button>
-        )}
+        <pre>{setup ? text : "Start the Crowdpod server to see the setup."}</pre>
+        {setup && <CopyButton text={text} />}
       </div>
+      {setup?.needs_token && !token && (
+        <p className="mcp-hint">Create an access token above and it will be filled in here (or replace PASTE_YOUR_TOKEN yourself).</p>
+      )}
+      {setup && (
+        <>
+          <p className="mcp-hint">
+            Needs{" "}
+            <a href="https://docs.astral.sh/uv/" target="_blank" rel="noreferrer">
+              uv
+            </a>
+            . For live browser visits, install Chromium once:
+          </p>
+          <div className="code-box">
+            <pre>{setup.browsers}</pre>
+            <CopyButton text={setup.browsers} />
+          </div>
+        </>
+      )}
       <p className="mcp-hint">
-        Keep <code>uv run crowdpod serve</code> running for simulations. Then ask your agent, for example:{" "}
+        {setup?.needs_token ? (
+          "Simulations run on this site."
+        ) : (
+          <>
+            Keep <code>uv run crowdpod serve</code> running for simulations.
+          </>
+        )}{" "}
+        Then ask your agent, for example:{" "}
         <em>“Use Crowdpod to test my idea for a hostel tiffin service with 300 people, then visit my site as a student
         looking for the price.”</em>
       </p>

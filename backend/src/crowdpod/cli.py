@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -43,9 +44,22 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def load_env_file(path: Path) -> None:
+    """KEY=value lines from backend/.env (ignored by git). Real environment variables win."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def main() -> None:
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")  # ₹ on Windows consoles
+    load_env_file(Path(__file__).resolve().parents[2] / ".env")
     parser = argparse.ArgumentParser(prog="crowdpod")
     sub = parser.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the pipeline on a brief JSON file")

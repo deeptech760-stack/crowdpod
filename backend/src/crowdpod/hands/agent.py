@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from ..llm.base import LLMProvider
+from ..llm.mock import MockProvider
 from ..models import Archetype, HandsDecision, HandsSession, HandsStep, Persona
 from ..sampler import stable_seed
 from ..vault import Vault, render
@@ -82,7 +83,14 @@ async def run_session(
                 "persona": persona, "archetype": archetype, "goal": goal, "observation": obs,
                 "history": [s.model_dump() for s in steps],
             }
-            decision = await provider.complete_json(system, user, HandsDecision, task="hands", context=context)
+            try:
+                decision = await provider.complete_json(system, user, HandsDecision, task="hands", context=context)
+            except Exception as e:
+                if provider.name == "mock":
+                    raise
+                # the model failed (quota, timeout, bad reply): the offline brain takes this step
+                decision = await MockProvider().complete_json(system, user, HandsDecision, task="hands", context=context)
+                decision = decision.model_copy(update={"thought": f"(offline brain: {type(e).__name__}) {decision.thought}"})
             labels = {e["id"]: e["label"] for e in obs.elements}
             error = ""
             if decision.action in ("click", "type") and decision.target not in labels:

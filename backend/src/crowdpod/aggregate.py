@@ -12,8 +12,10 @@ MIN_SEGMENT = 5  # a segment smaller than this can't be named the best market
 
 
 def plural(label: str) -> str:
-    """"Corporate worker" -> "corporate workers", "CEO" -> "CEOs"."""
-    return (label if label.isupper() else label.lower()) + "s"
+    """"Corporate worker" -> "corporate workers", "CEO" -> "CEOs", "Apple Pro upgrader" -> "Apple Pro upgraders"."""
+    # keep the capitals when the label has proper nouns or acronyms after its first letter
+    keep = label.isupper() or any(c.isupper() for c in label[1:])
+    return (label if keep else label.lower()) + "s"
 
 
 def _norm(text: str) -> str:
@@ -39,7 +41,7 @@ def summarise(
 ) -> CrowdSummary:
     if len(crowd) != len(reactions):
         raise ValueError("every persona needs exactly one reaction")
-    price = brief.monthly_price
+    price = brief.basis_price  # one-off total for purchases, per month for subscriptions
     total = len(crowd)
     groups: dict[str, list[tuple[Persona, Reaction]]] = defaultdict(list)
     for p, r in zip(crowd, reactions):
@@ -62,7 +64,7 @@ def summarise(
             interest_rate=round((verdicts["adopt"] + verdicts["maybe"]) / n, 3),
             avg_sentiment=round(mean(r.sentiment for r in rs), 3),
             median_wtp=float(median(r.willingness_to_pay for r in rs)),
-            price_fit_rate=round(sum(p.budget_month >= price for p, _ in rows) / n, 3),
+            price_fit_rate=round(sum(p.budget_for(brief) >= price for p, _ in rows) / n, 3),
             # share of the whole crowd that this segment turns into paying customers
             score=round(sum(paying(r) for r in rs) / total, 4),
             top_objections=top_phrases([r.top_objection for r in rs if r.verdict != "adopt"], 3),
@@ -79,11 +81,12 @@ def summarise(
     summary = CrowdSummary(
         size=total,
         monthly_price=price,
+        price_unit=brief.price_unit,
         adoption_rate=round(adoption, 3),
         interest_rate=round(interest, 3),
         median_wtp=float(median(r.willingness_to_pay for r in reactions)),
         median_wtp_interested=float(median([r.willingness_to_pay for r in reactions if r.verdict != "reject"] or [0])),
-        price_fit_rate=round(sum(p.budget_month >= price for p in crowd) / total, 3),
+        price_fit_rate=round(sum(p.budget_for(brief) >= price for p in crowd) / total, 3),
         best_segment=best.archetype_id if best else None,
         worst_segment=worst.archetype_id if worst else None,
         segments=segments,
@@ -97,11 +100,11 @@ def summarise(
 
 def headline(brief: IdeaBrief, s: CrowdSummary) -> str:
     if not s.best_segment:
-        return f"Nobody in a crowd of {s.size} would pay ₹{s.monthly_price:g}/month for {brief.name}."
+        return f"Nobody in a crowd of {s.size} would pay {brief.price_text()} for {brief.name}."
     best = next(x for x in s.segments if x.archetype_id == s.best_segment)
     line = (
         f"Your market is {plural(best.label)}: {best.adoption_rate:.0%} would adopt, "
-        f"median willingness to pay ₹{best.median_wtp:g}/month."
+        f"median willingness to pay {brief.price_text(best.median_wtp)}."
     )
     hint = brief.target_hint.lower()
     if hint and best.label.lower() not in hint and best.archetype_id.replace("-", " ") not in hint:

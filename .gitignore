@@ -6,9 +6,12 @@ __pycache__/
 .env
 vault/.obsidian/workspace*.json
 node_modules/
-frontend/.next/
+.next/
 frontend/out/
 frontend/test-results/
 frontend/playwright-report/
 frontend/artifacts/
 *.tsbuildinfo
+
+# personas generated for ideas: they can contain research about private ideas
+vault/personas/generated/

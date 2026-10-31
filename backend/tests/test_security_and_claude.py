@@ -45,13 +45,15 @@ def test_run_driven_by_claude(settings, brief, fake_llm, site_url):
         assert client.get(f"/api/runs/{run_id}/docs").json()["prd_md"].startswith("# Doc from fake model")
 
     calls = [r for r in fake_llm.requests if r.get("path", "").startswith("/v1/messages")]
-    # test call + 2 crowd batches + 2 documents + 1 browser step
-    assert len(calls) == 6
+    # test call + research + digest + audience design + 2 crowd batches + 2 documents + 1 browser step
+    assert len(calls) == 9
+    research_call = next(r for r in calls if "market researcher" in r["body"].get("system", ""))
+    assert research_call["body"]["tools"][0]["name"] == "web_search"
     assert {r["auth"] for r in calls} == {"sk-ant-test-9876"}
     assert all("server-side-fallback-2026-07-01" in (r["beta"] or "") for r in calls)
     assert all(r["body"]["fallbacks"] == "default" and r["body"]["output_config"]["effort"] == "low" for r in calls)
-    # crowd and browser calls ask for schema-checked JSON
-    assert sum("format" in r["body"]["output_config"] for r in calls) == 4
+    # digest, audience, crowd and browser calls ask for schema-checked JSON
+    assert sum("format" in r["body"]["output_config"] for r in calls) == 6
 
 
 def test_claude_needs_a_key(settings):

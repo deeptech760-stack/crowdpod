@@ -9,6 +9,7 @@ age: [30, 48]
 profession: stay-at-home father, freelance accountant on the side
 city: Bengaluru
 budget_month: [100, 600]
+purchase_budget: [15000, 50000]  # ₹ for one big one-off purchase (phone, laptop)
 patience_seconds: [30, 80]
 tech_comfort: [0.5, 0.8]
 price_sensitivity: [0.6, 0.85]

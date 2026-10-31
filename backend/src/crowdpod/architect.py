@@ -8,7 +8,7 @@ from typing import Any
 from .aggregate import plural
 from .crowd import brief_prompt
 from .llm.base import LLMProvider
-from .models import CrowdSummary, Documents, IdeaBrief, Persona, Reaction
+from .models import CrowdSummary, Research, Documents, IdeaBrief, Persona, Reaction
 from .vault import Vault, render
 
 BRD_OUTLINE = """Sections: # Business Requirements: <product>
@@ -36,7 +36,8 @@ def pick_quotes(crowd: list[Persona], reactions: list[Reaction], per_segment: in
 
 
 def summary_table(s: CrowdSummary) -> str:
-    rows = ["| Segment | People | Adopt | Interested | Median ₹/month | Budget covers price |", "|---|---|---|---|---|---|"]
+    unit = "₹ one-time" if s.price_unit == "one_time" else "₹/month"
+    rows = [f"| Segment | People | Adopt | Interested | Median {unit} | Budget covers price |", "|---|---|---|---|---|---|"]
     for seg in s.segments:
         rows.append(
             f"| {seg.label} | {seg.count} | {seg.adoption_rate:.0%} | {seg.interest_rate:.0%} | "
@@ -52,7 +53,7 @@ def _facts(brief: IdeaBrief, s: CrowdSummary, quotes: list[dict[str, Any]]) -> s
     return (
         f"{brief_prompt(brief)}\nFounder's intended audience: {brief.target_hint or 'not stated'}\n\n"
         f"Crowd: {s.size} people. Adoption {s.adoption_rate:.0%}, interested {s.interest_rate:.0%}, "
-        f"median willingness to pay ₹{s.median_wtp:g}/month (₹{s.median_wtp_interested:g} among those interested), budget covers price for {s.price_fit_rate:.0%}.\n"
+        f"median willingness to pay {brief.price_text(s.median_wtp)} ({brief.price_text(s.median_wtp_interested)} among those interested), budget covers price for {s.price_fit_rate:.0%}.\n"
         f"Headline: {s.headline}\n\n{summary_table(s)}\n\nTop objections:\n{objections}\n\n"
         f"Most requested:\n{wants}\n\nQuotes:\n{q}"
     )
@@ -82,7 +83,7 @@ def offline_document(doc: str, brief: IdeaBrief, s: CrowdSummary, quotes: list[d
         return (
             f"# Business Requirements: {brief.name}\n\n{note}\n\n## Summary\n{s.headline} "
             f"Across all {s.size} people, {s.adoption_rate:.0%} would adopt and {s.interest_rate:.0%} are at least interested. "
-            f"Those interested would pay a median of ₹{s.median_wtp_interested:g} a month against an asking price of ₹{s.monthly_price:g}.\n\n"
+            f"Those interested would pay a median of {brief.price_text(s.median_wtp_interested)} against an asking price of {brief.price_text()}.\n\n"
             f"## Market\n{summary_table(s)}\n\n" + (f"What the strongest segment says:\n\n{seg_quotes}\n\n" if seg_quotes else "")
             + f"## Pricing\nThe price fits the monthly budget of {s.price_fit_rate:.0%} of the crowd"
             + (f" and {seg.price_fit_rate:.0%} of {plural(seg.label)}. Their median willingness to pay is ₹{seg.median_wtp:g}." if seg else ".")
@@ -107,14 +108,31 @@ class Architect:
         self.vault = vault
         self.provider = provider
 
-    async def write(self, brief: IdeaBrief, summary: CrowdSummary, crowd: list[Persona], reactions: list[Reaction]) -> Documents:
+    async def write(
+        self, brief: IdeaBrief, summary: CrowdSummary, crowd: list[Persona], reactions: list[Reaction],
+        research: Research | None = None,
+    ) -> Documents:
         quotes = pick_quotes(crowd, reactions)
         facts = _facts(brief, summary, quotes)
+        if research:
+            how = "live web search" if research.grounded else "model knowledge, not live"
+            lines = [f"\n\nMarket research ({how}):", research.summary]
+            lines += [f"- {f}" for f in research.facts + research.price_points]
+            if research.sources:
+                lines.append("Sources:")
+                lines += [f"- {s.title or s.url}: {s.url}" for s in research.sources[:10]]
+            facts += "\n".join(lines)
 
         async def one(doc: str, outline: str) -> str:
             system = render(self.vault.template("architect"), {"doc": doc.upper(), "doc_outline": outline})
             context = {"doc": doc, "brief": brief, "summary": summary, "quotes": quotes}
-            return await self.provider.complete_text(system, facts, task="architect", context=context)
+            try:
+                return await self.provider.complete_text(system, facts, task="architect", context=context)
+            except Exception as e:
+                if self.provider.name == "mock":
+                    raise
+                note = f"_Written by the offline brain because the model failed ({type(e).__name__})._\n\n"
+                return note + offline_document(doc, brief, summary, quotes)
 
         brd, prd = await asyncio.gather(one("brd", BRD_OUTLINE), one("prd", PRD_OUTLINE))
         return Documents(brd_md=brd, prd_md=prd)

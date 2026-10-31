@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "motion/react";
@@ -21,6 +21,7 @@ import {
   Users,
   UsersRound,
 } from "lucide-react";
+import { api } from "@/lib/api";
 
 export function AuthLogo() {
   return (
@@ -58,10 +59,20 @@ export default function LoginPage() {
   const [agreeTerms, setAgreeTerms] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // a failed Google sign-in comes back as ?error=...
+  const [error, setError] = useState<string | null>(searchParams.get("error"));
   const [successDialog, setSuccessDialog] = useState<string | null>(null);
+  const [googleReady, setGoogleReady] = useState<boolean | null>(null);
+  const next = searchParams.get("next");
+  const destination = next && next.startsWith("/app/") ? next : "/app/";
 
-  const handleSubmit = (e: FormEvent) => {
+  useEffect(() => {
+    api.authConfig().then((c) => setGoogleReady(c.google)).catch(() => setGoogleReady(false));
+    // already signed in: go straight to the app
+    api.me().then((m) => m.user && window.location.assign(destination)).catch(() => {});
+  }, [destination]);
+
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -70,8 +81,12 @@ export default function LoginPage() {
       setError("Please enter a valid work email address.");
       return;
     }
-    if (mode !== "forgot" && (!password || password.length < 6)) {
-      setError("Password must be at least 6 characters long.");
+    if (mode === "register" && password.length < 8) {
+      setError("Use a password of at least 8 characters.");
+      return;
+    }
+    if (mode === "login" && !password) {
+      setError("Enter your password.");
       return;
     }
     if (mode === "register" && !name.trim()) {
@@ -83,28 +98,32 @@ export default function LoginPage() {
       return;
     }
 
-    setLoading(true);
+    if (mode === "forgot") {
+      // There's no email service on a self-hosted Crowdpod, so no fake "link sent" message.
+      setError("Password reset by email isn't available on this Crowdpod. Ask the person who runs it to reset your account, or sign in with Google.");
+      return;
+    }
 
-    // Simulate authentication delay
-    setTimeout(() => {
+    setLoading(true);
+    try {
+      if (mode === "register") await api.register(name.trim(), email.trim(), password);
+      else await api.login(email.trim(), password);
+      // a full page load, so the app starts fresh with the new session
+      window.location.assign(destination);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't reach the Crowdpod server.");
       setLoading(false);
-      if (mode === "forgot") {
-        setSuccessDialog(`Password reset instructions have been sent to ${email}. Check your inbox!`);
-      } else if (mode === "register") {
-        setSuccessDialog(`Welcome to Crowdpod, ${name}! Your account has been created.`);
-      } else {
-        setSuccessDialog(`Welcome back! You are now logged in as ${email}.`);
-      }
-    }, 900);
+    }
   };
 
   const handleGoogleLogin = () => {
-    setLoading(true);
     setError(null);
-    setTimeout(() => {
-      setLoading(false);
-      setSuccessDialog("Successfully connected via Google! Welcome to Crowdpod.");
-    }, 800);
+    if (!googleReady) {
+      setError("Google sign-in isn't set up on this Crowdpod yet. Use email and password, or ask the person who runs it to add Google sign-in.");
+      return;
+    }
+    setLoading(true);
+    window.location.assign(api.googleStartUrl());
   };
 
   return (
@@ -386,7 +405,7 @@ export default function LoginPage() {
                         fill="#EA4335"
                       />
                     </svg>
-                    <span>Continue with Google</span>
+                    <span>Continue with Google{googleReady === false ? " (not set up)" : ""}</span>
                   </button>
                 </>
               )}
